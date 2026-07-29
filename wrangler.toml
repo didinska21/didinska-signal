@@ -1,4 +1,4 @@
-name = "futures-signal-bot"
+name = "didinska-signal"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
