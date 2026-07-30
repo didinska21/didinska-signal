@@ -1,6 +1,35 @@
 # Salin file ini menjadi ".dev.vars" (tanpa .example) untuk testing lokal via `wrangler dev`.
 # JANGAN commit file ".dev.vars" ke git (sudah masuk .gitignore).
 
-GROQ_API_KEY=your_groq_api_key_here
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-TELEGRAM_CHAT_ID=your_telegram_chat_id_here
+
+# --- Groq API Keys ---
+# GROQ_API_KEY = fallback / key dasar. WAJIB diisi.
+# Kalau HANYA field ini yang diisi, semua AI (1-10) + AI Penyimpul akan
+# berbagi 1 key yang sama. Ini bisa memicu error 429 Too Many Requests
+# saat menjalankan 10 AI beruntun (kuota per-menit akun gratis Groq cepat habis).
+GROQ_API_KEY=your_groq_api_key_here
+
+# Opsional tapi SANGAT disarankan: isi key terpisah per AI analyst supaya
+# tiap AI punya kuota rate-limit sendiri-sendiri, tidak saling rebutan.
+# Kalau salah satu GROQ_API_KEY_<N> tidak diisi, otomatis fallback ke GROQ_API_KEY.
+GROQ_API_KEY_1=
+GROQ_API_KEY_2=
+GROQ_API_KEY_3=
+GROQ_API_KEY_4=
+GROQ_API_KEY_5=
+GROQ_API_KEY_6=
+GROQ_API_KEY_7=
+GROQ_API_KEY_8=
+GROQ_API_KEY_9=
+GROQ_API_KEY_10=
+
+# Opsional: key ke-11, khusus untuk AI Penyimpul (tahap rangkuman akhir).
+# Kalau kosong, fallback ke GROQ_API_KEY.
+GROQ_SUMMARIZER_API_KEY=
+
+# Opsional: override nama model kalau Groq deprecate model default.
+# Cek model terbaru di https://console.groq.com/docs/models
+GROQ_VISION_MODEL=
+GROQ_SUMMARY_MODEL=
+GROQ_TEXT_MODEL=
