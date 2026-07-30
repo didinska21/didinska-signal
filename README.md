@@ -44,6 +44,27 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 ```
 > `TELEGRAM_CHAT_ID` tidak dipakai lagi di v2 ini (dulu untuk push manual), boleh dihapus dari secrets kalau mau beres-beres.
 
+#### 2a. (Disarankan) API key terpisah per AI analyst — hindari rate limit
+Kalau semua AI (1-10) pakai `GROQ_API_KEY` yang sama, mereka berebut kuota akun Groq
+yang sama saat dipanggil berurutan → gampang kena `429 Too Many Requests` di tengah proses
+(AI 1 sukses, AI 2 dst gagal).
+
+Solusi: buat akun Groq tambahan (gratis), ambil API key masing-masing, lalu set sebagai
+secret terpisah untuk tiap nomor AI:
+```bash
+npx wrangler secret put GROQ_API_KEY_1
+npx wrangler secret put GROQ_API_KEY_2
+npx wrangler secret put GROQ_API_KEY_3
+# ...dst sampai GROQ_API_KEY_10
+npx wrangler secret put GROQ_SUMMARIZER_API_KEY   # khusus AI Penyimpul
+```
+- Kalau `GROQ_API_KEY_<n>` tidak di-set untuk suatu nomor, AI itu otomatis fallback
+  pakai `GROQ_API_KEY` biasa (jadi tidak wajib isi ke-10nya sekaligus, bisa bertahap).
+- Kalau user pilih mode "5 AI", hanya `GROQ_API_KEY_1` s/d `GROQ_API_KEY_5` yang dipakai.
+- Kalau ada AI yang gagal dan pesan error muncul di Telegram, sekarang errornya juga
+  menyebutkan key mana yang dipakai (`GROQ_API_KEY_3` atau `GROQ_API_KEY (fallback)`),
+  jadi lebih mudah dilacak.
+
 ### 3. Deploy
 ```bash
 npm run deploy
