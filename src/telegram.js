@@ -80,3 +80,16 @@ export async function clearOldReplyKeyboard(env, chatId) {
     await deleteMessage(env, chatId, messageId);
   }
 }
+
+/** Download 1 file (misal foto chart) dari Telegram, kembalikan sebagai ArrayBuffer */
+export async function getFile(env, fileId) {
+  const info = await call(env, "getFile", { file_id: fileId });
+  const filePath = info.result.file_path;
+  const fileUrl = `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${filePath}`;
+
+  const res = await fetch(fileUrl);
+  if (!res.ok) {
+    throw new Error(`Gagal download file dari Telegram: ${res.status}`);
+  }
+  return res.arrayBuffer();
+}
