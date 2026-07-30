@@ -2,18 +2,25 @@ name = "didinska-signal"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
-# Jadwal cron: tiap 15 menit. Sesuaikan sesuai timeframe sinyal yang diinginkan.
-# Format cron standar (UTC). Contoh lain: "0 * * * *" = tiap jam.
-[triggers]
-crons = ["*/15 * * * *"]
+# Cron dinonaktifkan — bot sekarang berbasis webhook (interaktif via menu),
+# bukan push notifikasi otomatis.
+# [triggers]
+# crons = ["*/15 * * * *"]
 
-# Secrets (JANGAN ditulis di sini, set via CLI):
-#   npx wrangler secret put GROQ_API_KEY
-#   npx wrangler secret put TELEGRAM_BOT_TOKEN
-#   npx wrangler secret put TELEGRAM_CHAT_ID
+# KV Namespace untuk menyimpan session per user (state menu, foto chart yang dikirim, dll).
+# Buat dulu dengan: npx wrangler kv namespace create SESSIONS
+# lalu isi "id" di bawah ini dengan id yang muncul dari command tersebut.
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "ISI_DENGAN_ID_KV_NAMESPACE_KAMU"
 
 [vars]
-# Variabel non-rahasia, boleh ditulis langsung di sini
+# Masih dipertahankan untuk dipakai lagi nanti saat fitur analisis chart aktif
 SYMBOL = "BTCUSDT"
-INTERVAL = "15m"        # interval candle Binance: 1m,5m,15m,1h,4h,1d
-CANDLE_LIMIT = "100"    # jumlah candle historis yang diambil
+INTERVAL = "15m"
+CANDLE_LIMIT = "100"
+
+# Secrets (set via CLI atau dashboard Cloudflare, JANGAN ditulis di sini):
+#   npx wrangler secret put GROQ_API_KEY
+#   npx wrangler secret put TELEGRAM_BOT_TOKEN
+#   npx wrangler secret put TELEGRAM_CHAT_ID   <- bisa dihapus nanti, sudah tidak dipakai untuk push
