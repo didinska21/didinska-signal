@@ -22,6 +22,61 @@ const ANALYST_PERSONAS = [
   "fokus pada moving average dan arah trend",
 ];
 
+/** Jeda (ms) */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Panggil Groq chat completion, dengan retry otomatis kalau kena rate limit (429).
+ * Groq biasanya kasih header "retry-after" (detik) yang bilang berapa lama harus
+ * nunggu sebelum boleh coba lagi — kita ikuti angka itu persis, bukan tebak-tebakan.
+ */
+async function callGroqChatCompletion(apiKey, body, label) {
+  const MAX_RETRIES = 3;
+  let lastError;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const content = data.choices[0].message.content;
+
+      if (!content || !content.trim()) {
+        // Khusus model reasoning (gpt-oss dkk): kadang semua token abis buat "mikir",
+        // hasil akhirnya jadi kosong. Ini bukan error jaringan, jadi kasih pesan yang jelas.
+        throw new Error(
+          `${label}: model mengembalikan jawaban kosong (kemungkinan token habis untuk reasoning). Coba naikkan max_tokens atau turunkan reasoning_effort.`
+        );
+      }
+
+      return content;
+    }
+
+    if (res.status === 429 && attempt < MAX_RETRIES) {
+      const retryAfterHeader = res.headers.get("retry-after");
+      const waitSeconds = retryAfterHeader ? parseFloat(retryAfterHeader) : (attempt + 1) * 5;
+      console.warn(`${label}: kena rate limit (429), tunggu ${waitSeconds}s lalu coba lagi (percobaan ${attempt + 1}/${MAX_RETRIES})`);
+      await sleep(waitSeconds * 1000);
+      continue;
+    }
+
+    const errText = await res.text();
+    lastError = new Error(`${label}: ${res.status} - ${errText}`);
+    if (res.status !== 429) throw lastError; // error selain rate limit, jangan diulang
+  }
+
+  throw lastError || new Error(`${label}: gagal setelah beberapa percobaan (rate limit terus-terusan)`);
+}
+
 function arrayBufferToBase64(buffer) {
   let binary = "";
   const bytes = new Uint8Array(buffer);
@@ -84,13 +139,9 @@ Bahasa Indonesia, langsung ke inti, tanpa basa-basi.`;
     ...dataUrls.map((url) => ({ type: "image_url", image_url: { url } })),
   ];
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
+  return callGroqChatCompletion(
+    apiKey,
+    {
       model,
       temperature: 0.6,
       max_tokens: 400,
@@ -98,18 +149,9 @@ Bahasa Indonesia, langsung ke inti, tanpa basa-basi.`;
         { role: "system", content: systemPrompt },
         { role: "user", content },
       ],
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(
-      `Groq Vision error (AI ${analystNumber}, key: ${dedicatedKeyLabel(env, analystNumber)}): ${res.status} - ${errText}`
-    );
-  }
-
-  const data = await res.json();
-  return data.choices[0].message.content;
+    },
+    `Groq Vision (AI ${analystNumber}, key: ${dedicatedKeyLabel(env, analystNumber)})`
+  );
 }
 
 /**
@@ -138,28 +180,18 @@ Akhiri dengan satu kalimat: sebutkan ini hasil gabungan ${opinions.length} AI, b
 
   const opinionsText = opinions.map((op, i) => `Opini AI ${i + 1}:\n${op}`).join("\n\n");
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
+  return callGroqChatCompletion(
+    apiKey,
+    {
       model,
       temperature: 0.3,
-      max_tokens: 600,
+      max_tokens: 1200, // dinaikin dari 600 -> gpt-oss-120b "mikir" dulu (reasoning tokens)
+      reasoning_effort: "low", // biar reasoning-nya nggak makan banyak jatah token, sisa buat jawaban akhir
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: opinionsText },
       ],
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Groq Summarizer error: ${res.status} - ${errText}`);
-  }
-
-  const data = await res.json();
-  return data.choices[0].message.content;
+    },
+    "Groq Summarizer"
+  );
 }
