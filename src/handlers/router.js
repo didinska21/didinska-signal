@@ -1,4 +1,9 @@
-import { sendMessage, editMessageText, answerCallbackQuery } from "../telegram.js";
+import {
+  sendMessage,
+  editMessageText,
+  answerCallbackQuery,
+  clearOldReplyKeyboard,
+} from "../telegram.js";
 import {
   MAIN_MENU_TEXT,
   mainMenuKeyboard,
@@ -8,7 +13,7 @@ import {
   NEWS_ITEM_LABELS,
   SIGNAL_TRADE_PROMPT,
 } from "../menus.js";
-import { getSession, setSession, resetSession } from "../state.js";
+import { getMode, setMode, addPhoto, countPhotos, resetSession } from "../state.js";
 
 /**
  * Titik masuk utama: terima 1 update dari Telegram, arahkan ke handler yang sesuai.
@@ -20,7 +25,6 @@ export async function handleUpdate(env, update) {
   if (update.message) {
     return handleMessage(env, update.message);
   }
-  // Tipe update lain (edited_message, dll) diabaikan untuk saat ini.
 }
 
 async function handleMessage(env, message) {
@@ -30,6 +34,8 @@ async function handleMessage(env, message) {
   // --- Perintah global ---
   if (text === "/start") {
     await resetSession(env, chatId);
+    // Bersihkan custom keyboard lama (dari bot/sesi sebelumnya) yang mungkin masih nempel
+    await clearOldReplyKeyboard(env, chatId);
     await sendMessage(env, chatId, MAIN_MENU_TEXT, mainMenuKeyboard());
     return;
   }
@@ -40,43 +46,42 @@ async function handleMessage(env, message) {
     return;
   }
 
-  const session = await getSession(env, chatId);
+  const mode = await getMode(env, chatId);
 
   // --- Mode: sedang menunggu foto chart untuk Signal Trade ---
-  if (session.mode === "awaiting_chart") {
+  if (mode === "awaiting_chart") {
     if (message.photo && message.photo.length > 0) {
-      // Ambil resolusi terbesar (elemen terakhir array photo)
       const fileId = message.photo[message.photo.length - 1].file_id;
-      session.photos.push(fileId);
-      await setSession(env, chatId, session);
+      await addPhoto(env, chatId, fileId);
+      const total = await countPhotos(env, chatId);
 
       await sendMessage(
         env,
         chatId,
-        `✅ Foto chart diterima (total: <b>${session.photos.length}</b>).\n\nKirim foto timeframe lain, atau ketik /selesai jika sudah cukup.`
+        `✅ Foto chart diterima (total: <b>${total}</b>).\n\nKirim foto timeframe lain, atau ketik /selesai jika sudah cukup.`
       );
       return;
     }
 
     if (text === "/selesai") {
-      if (session.photos.length === 0) {
+      const total = await countPhotos(env, chatId);
+
+      if (total === 0) {
         await sendMessage(env, chatId, "Belum ada foto yang dikirim. Kirim minimal 1 foto chart dulu, atau ketik /batal.");
         return;
       }
 
-      // TODO: di sini nanti dipanggil fungsi analisis multi-timeframe (Groq Vision).
-      // Untuk saat ini masih placeholder, sesuai permintaan "pelan-pelan, base dulu".
+      // TODO: panggil fungsi analisis multi-timeframe (Groq Vision) di sini nanti.
       await sendMessage(
         env,
         chatId,
-        `📥 Menerima <b>${session.photos.length} foto chart</b>.\n\n⚙️ Fitur analisis otomatis masih dalam pengembangan, belum bisa memproses gambar untuk saat ini.`,
+        `📥 Menerima <b>${total} foto chart</b>.\n\n⚙️ Fitur analisis otomatis masih dalam pengembangan, belum bisa memproses gambar untuk saat ini.`,
         mainMenuKeyboard()
       );
       await resetSession(env, chatId);
       return;
     }
 
-    // User kirim teks lain padahal harusnya kirim foto
     await sendMessage(
       env,
       chatId,
@@ -85,7 +90,7 @@ async function handleMessage(env, message) {
     return;
   }
 
-  // --- Default: user kirim sesuatu tanpa konteks aktif ---
+  // --- Default ---
   await sendMessage(env, chatId, "Ketik /start untuk membuka menu utama.");
 }
 
@@ -94,7 +99,6 @@ async function handleCallbackQuery(env, callbackQuery) {
   const messageId = callbackQuery.message.message_id;
   const data = callbackQuery.data;
 
-  // Wajib di-ack supaya tombol tidak "loading" terus di Telegram
   await answerCallbackQuery(env, callbackQuery.id);
 
   switch (data) {
@@ -108,7 +112,7 @@ async function handleCallbackQuery(env, callbackQuery) {
       return;
 
     case "menu_signal":
-      await setSession(env, chatId, { mode: "awaiting_chart", photos: [] });
+      await setMode(env, chatId, "awaiting_chart");
       await editMessageText(env, chatId, messageId, SIGNAL_TRADE_PROMPT, backOnlyKeyboard("back_main"));
       return;
 
