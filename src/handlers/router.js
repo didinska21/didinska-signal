@@ -11,13 +11,24 @@ import {
   newsMenuKeyboard,
   backOnlyKeyboard,
   NEWS_ITEM_LABELS,
-  SIGNAL_TRADE_PROMPT,
+  TRADE_MODE_SELECT_TEXT,
+  tradeModeKeyboard,
+  signalTradePrompt,
+  AI_COUNT_PROMPT_TEXT,
+  aiCountKeyboard,
 } from "../menus.js";
-import { getMode, setMode, addPhoto, countPhotos, resetSession } from "../state.js";
+import {
+  getMode,
+  setMode,
+  setTradeMode,
+  addPhoto,
+  countPhotos,
+  resetSession,
+  startAnalysis,
+} from "../state.js";
 
-/**
- * Titik masuk utama: terima 1 update dari Telegram, arahkan ke handler yang sesuai.
- */
+const VALID_TRADE_MODES = ["scalping", "daytrade", "swing"];
+
 export async function handleUpdate(env, update) {
   if (update.callback_query) {
     return handleCallbackQuery(env, update.callback_query);
@@ -34,14 +45,13 @@ async function handleMessage(env, message) {
   // --- Perintah global ---
   if (text === "/start") {
     await resetSession(env, chatId);
-    // Bersihkan custom keyboard lama (dari bot/sesi sebelumnya) yang mungkin masih nempel
     await clearOldReplyKeyboard(env, chatId);
     await sendMessage(env, chatId, MAIN_MENU_TEXT, mainMenuKeyboard());
     return;
   }
 
   if (text === "/batal") {
-    await resetSession(env, chatId);
+    await resetSession(env, chatId); // ini juga membatalkan proses AI kalau sedang berjalan
     await sendMessage(env, chatId, "❌ Dibatalkan. Kembali ke menu utama.", mainMenuKeyboard());
     return;
   }
@@ -70,14 +80,8 @@ async function handleMessage(env, message) {
         return;
       }
 
-      // TODO: panggil fungsi analisis multi-timeframe (Groq Vision) di sini nanti.
-      await sendMessage(
-        env,
-        chatId,
-        `📥 Menerima <b>${total} foto chart</b>.\n\n⚙️ Fitur analisis otomatis masih dalam pengembangan, belum bisa memproses gambar untuk saat ini.`,
-        mainMenuKeyboard()
-      );
-      await resetSession(env, chatId);
+      await setMode(env, chatId, "choosing_ai_count");
+      await sendMessage(env, chatId, AI_COUNT_PROMPT_TEXT, aiCountKeyboard());
       return;
     }
 
@@ -86,6 +90,18 @@ async function handleMessage(env, message) {
       chatId,
       "Mohon kirim <b>foto chart</b> (bukan teks). Ketik /selesai jika sudah selesai kirim foto, atau /batal untuk keluar."
     );
+    return;
+  }
+
+  // --- Mode: sedang pilih jumlah AI, tapi user malah kirim teks ---
+  if (mode === "choosing_ai_count") {
+    await sendMessage(env, chatId, "Silakan pilih jumlah AI lewat tombol di atas, atau ketik /batal.");
+    return;
+  }
+
+  // --- Mode: sedang diproses AI, jangan ganggu ---
+  if (mode === "processing") {
+    await sendMessage(env, chatId, "⏳ Analisis sedang berjalan, mohon tunggu... (ketik /batal untuk membatalkan)");
     return;
   }
 
@@ -100,6 +116,25 @@ async function handleCallbackQuery(env, callbackQuery) {
 
   await answerCallbackQuery(env, callbackQuery.id);
 
+  // --- Pilih mode trading (Scalping/Day Trade/Swing) ---
+  if (data.startsWith("mode_")) {
+    const tradeModeKey = data.replace("mode_", "");
+    if (!VALID_TRADE_MODES.includes(tradeModeKey)) return;
+
+    await setTradeMode(env, chatId, tradeModeKey);
+    await setMode(env, chatId, "awaiting_chart");
+    await editMessageText(env, chatId, messageId, signalTradePrompt(tradeModeKey), backOnlyKeyboard("back_main"));
+    return;
+  }
+
+  // --- Pilih jumlah AI analisa ---
+  if (data === "ai_count_5" || data === "ai_count_10") {
+    const aiCount = data === "ai_count_5" ? 5 : 10;
+    await editMessageText(env, chatId, messageId, "⏳ Memulai analisis, mohon tunggu...");
+    await startAnalysis(env, chatId, messageId, aiCount);
+    return;
+  }
+
   switch (data) {
     case "menu_news":
       await editMessageText(env, chatId, messageId, NEWS_MENU_TEXT, newsMenuKeyboard());
@@ -111,8 +146,7 @@ async function handleCallbackQuery(env, callbackQuery) {
       return;
 
     case "menu_signal":
-      await setMode(env, chatId, "awaiting_chart");
-      await editMessageText(env, chatId, messageId, SIGNAL_TRADE_PROMPT, backOnlyKeyboard("back_main"));
+      await editMessageText(env, chatId, messageId, TRADE_MODE_SELECT_TEXT, tradeModeKeyboard());
       return;
 
     case "news_fomc":
