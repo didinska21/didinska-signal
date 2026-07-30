@@ -42,11 +42,36 @@ async function telegramPhotosToDataUrls(env, fileIds) {
   return urls;
 }
 
+/**
+ * Ambil API key khusus untuk 1 nomor AI analyst.
+ * Urutan prioritas: GROQ_API_KEY_<n> (key khusus AI ke-n) -> GROQ_API_KEY (fallback bersama).
+ * Tujuannya: tiap AI analyst pakai akun/kuota Groq sendiri-sendiri supaya tidak
+ * saling kena rate limit (429 Too Many Requests) saat dipanggil berurutan.
+ */
+function getAnalystApiKey(env, analystNumber) {
+  const dedicatedKey = env[`GROQ_API_KEY_${analystNumber}`];
+  return dedicatedKey || env.GROQ_API_KEY;
+}
+
+/** Label untuk pesan error: biar kelihatan key khusus atau fallback yang dipakai */
+function dedicatedKeyLabel(env, analystNumber) {
+  return env[`GROQ_API_KEY_${analystNumber}`]
+    ? `GROQ_API_KEY_${analystNumber}`
+    : "GROQ_API_KEY (fallback)";
+}
+
 /** 1 "AI analyst" menganalisa chart, kembalikan opini singkat (teks) */
 export async function analyzeChartImages(env, fileIds, tradeMode, analystNumber) {
   const dataUrls = await telegramPhotosToDataUrls(env, fileIds);
   const persona = ANALYST_PERSONAS[(analystNumber - 1) % ANALYST_PERSONAS.length];
   const model = env.GROQ_VISION_MODEL || DEFAULT_VISION_MODEL;
+  const apiKey = getAnalystApiKey(env, analystNumber);
+
+  if (!apiKey) {
+    throw new Error(
+      `Tidak ada API key untuk AI ${analystNumber}. Set secret GROQ_API_KEY_${analystNumber} atau GROQ_API_KEY.`
+    );
+  }
 
   const systemPrompt = `Anda adalah analis teknikal futures AI ke-${analystNumber}, dengan gaya analisis ${persona}.
 Mode trading yang dipakai user: ${tradeMode}.
@@ -63,7 +88,7 @@ Bahasa Indonesia, langsung ke inti, tanpa basa-basi.`;
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${env.GROQ_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model,
@@ -78,7 +103,9 @@ Bahasa Indonesia, langsung ke inti, tanpa basa-basi.`;
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Groq Vision error (AI ${analystNumber}): ${res.status} - ${errText}`);
+    throw new Error(
+      `Groq Vision error (AI ${analystNumber}, key: ${dedicatedKeyLabel(env, analystNumber)}): ${res.status} - ${errText}`
+    );
   }
 
   const data = await res.json();
