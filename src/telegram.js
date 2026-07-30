@@ -56,3 +56,27 @@ export async function answerCallbackQuery(env, callbackQueryId, text = "") {
 export async function setWebhook(env, url) {
   return call(env, "setWebhook", { url });
 }
+
+/** Hapus pesan (dipakai untuk membersihkan pesan sementara) */
+export async function deleteMessage(env, chatId, messageId) {
+  try {
+    return await call(env, "deleteMessage", { chat_id: chatId, message_id: messageId });
+  } catch {
+    // Kalau gagal hapus (misal pesan sudah terlalu lama), abaikan saja — tidak kritis.
+    return null;
+  }
+}
+
+/**
+ * Hapus custom keyboard (ReplyKeyboardMarkup) lama yang mungkin masih nempel
+ * di chat dari sesi/bot sebelumnya. Telegram mewajibkan ada teks saat mengirim
+ * remove_keyboard, jadi kita kirim pesan singkat lalu langsung hapus lagi
+ * supaya tidak mengotori riwayat chat.
+ */
+export async function clearOldReplyKeyboard(env, chatId) {
+  const result = await sendMessage(env, chatId, "🔄", { remove_keyboard: true });
+  const messageId = result?.result?.message_id;
+  if (messageId) {
+    await deleteMessage(env, chatId, messageId);
+  }
+}
