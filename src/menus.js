@@ -71,30 +71,41 @@ export function tradeModeKeyboard() {
   };
 }
 
-export function signalTradePrompt(tradeModeKey) {
+// --- Input simbol/pair trading ---
+export function symbolPromptText(tradeModeKey) {
   const mode = TRADE_MODES[tradeModeKey];
   return `📈 <b>Signal Trade — ${mode.label}</b>
 
-Timeframe disarankan: <b>${mode.tfHint}</b>
+Ketik simbol pair futures yang mau dianalisa, contoh: <b>BTCUSDT</b>, <b>ETHUSDT</b>, <b>SOLUSDT</b>.
 
-Kirim <b>foto chart</b> sesuai timeframe di atas (boleh lebih dari 1 foto, kirim satu per satu, maksimal 5 foto karena batas dari AI vision-nya).
-
-Setelah semua foto terkirim, ketik /selesai untuk lanjut.
+(Data candle diambil otomatis dari Binance Futures, fallback ke Bybit kalau gagal)
 Ketik /batal untuk membatalkan.`;
 }
 
-// --- Pilih jumlah AI analisa ---
-export const AI_COUNT_PROMPT_TEXT = `📥 Foto chart diterima.
+// --- Pilih mode analisis: Cepat (5 AI, murni data API) vs Lengkap (10 AI + foto) ---
+export function aiModePromptText(symbol) {
+  return `✅ Simbol <b>${symbol}</b> diterima.
 
-Pilih jumlah AI yang akan menganalisa chart kamu. Tiap AI akan kasih opini terpisah (loading satu-satu), lalu 1 <b>AI Penyimpul</b> merangkum semuanya jadi 1 sinyal final:`;
+Pilih mode analisis:
+🚀 <b>Cepat</b> — 5 AI spesialis (Trend, Momentum, Volatilitas, Support/Resistance, Risk Management), semua berbasis data numerik, tanpa perlu kirim foto.
+🔬 <b>Lengkap</b> — 10 AI spesialis (termasuk Volume, Smart Money Concept, Price Action, Multi-Timeframe, & Konteks Makro). Perlu kirim 1 foto chart untuk AI Price Action.`;
+}
 
-export function aiCountKeyboard() {
+export function aiModeKeyboard() {
   return {
     inline_keyboard: [
       [
-        { text: "🤖 5 AI", callback_data: "ai_count_5" },
-        { text: "🤖 10 AI", callback_data: "ai_count_10" },
+        { text: "🚀 Cepat (5 AI)", callback_data: "ai_mode_cepat" },
+        { text: "🔬 Lengkap (10 AI)", callback_data: "ai_mode_lengkap" },
       ],
     ],
   };
+}
+
+// --- Prompt kirim foto (hanya untuk mode Lengkap, khusus AI Price Action) ---
+export function chartPhotoPromptText(tradeModeKey) {
+  const mode = TRADE_MODES[tradeModeKey];
+  return `📸 Kirim <b>1 foto chart</b> (timeframe disarankan: <b>${mode.tfHint}</b>) khusus untuk AI Price Action.
+
+Ketik /batal untuk membatalkan.`;
 }
