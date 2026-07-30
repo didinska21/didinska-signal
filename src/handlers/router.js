@@ -52,8 +52,7 @@ async function handleMessage(env, message) {
   if (mode === "awaiting_chart") {
     if (message.photo && message.photo.length > 0) {
       const fileId = message.photo[message.photo.length - 1].file_id;
-      await addPhoto(env, chatId, fileId);
-      const total = await countPhotos(env, chatId);
+      const total = await addPhoto(env, chatId, fileId);
 
       await sendMessage(
         env,
