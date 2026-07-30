@@ -13,19 +13,24 @@ import {
   NEWS_ITEM_LABELS,
   TRADE_MODE_SELECT_TEXT,
   tradeModeKeyboard,
-  signalTradePrompt,
-  AI_COUNT_PROMPT_TEXT,
-  aiCountKeyboard,
+  symbolPromptText,
+  aiModePromptText,
+  aiModeKeyboard,
+  chartPhotoPromptText,
 } from "../menus.js";
 import {
   getMode,
   setMode,
   setTradeMode,
+  getTradeMode,
+  setSymbol,
+  getSymbol,
+  setAiMode,
   addPhoto,
-  countPhotos,
   resetSession,
   startAnalysis,
 } from "../state.js";
+import { buildMarketDataPackage, normalizeSymbol } from "../marketData.js";
 
 const VALID_TRADE_MODES = ["scalping", "daytrade", "swing"];
 
@@ -58,44 +63,46 @@ async function handleMessage(env, message) {
 
   const mode = await getMode(env, chatId);
 
-  // --- Mode: sedang menunggu foto chart untuk Signal Trade ---
-  if (mode === "awaiting_chart") {
-    if (message.photo && message.photo.length > 0) {
-      const fileId = message.photo[message.photo.length - 1].file_id;
-      const total = await addPhoto(env, chatId, fileId);
-
-      await sendMessage(
-        env,
-        chatId,
-        `✅ Foto chart diterima (total: <b>${total}</b>).\n\nKirim foto timeframe lain, atau ketik /selesai jika sudah cukup.`
-      );
+  // --- Mode: sedang menunggu input simbol pair ---
+  if (mode === "awaiting_symbol") {
+    if (!text) {
+      await sendMessage(env, chatId, "Mohon ketik simbol pair (contoh: BTCUSDT), atau /batal untuk keluar.");
       return;
     }
 
-    if (text === "/selesai") {
-      const total = await countPhotos(env, chatId);
+    const symbol = normalizeSymbol(text);
+    if (symbol.length < 5) {
+      await sendMessage(env, chatId, "Simbol sepertinya tidak valid. Contoh yang benar: BTCUSDT, ETHUSDT. Coba lagi, atau /batal.");
+      return;
+    }
 
-      if (total === 0) {
-        await sendMessage(env, chatId, "Belum ada foto yang dikirim. Kirim minimal 1 foto chart dulu, atau ketik /batal.");
-        return;
-      }
+    await setSymbol(env, chatId, symbol);
+    await setMode(env, chatId, "choosing_ai_mode");
+    await sendMessage(env, chatId, aiModePromptText(symbol), aiModeKeyboard());
+    return;
+  }
 
-      await setMode(env, chatId, "choosing_ai_count");
-      await sendMessage(env, chatId, AI_COUNT_PROMPT_TEXT, aiCountKeyboard());
+  // --- Mode: sedang pilih mode analisis, tapi user malah kirim teks ---
+  if (mode === "choosing_ai_mode") {
+    await sendMessage(env, chatId, "Silakan pilih mode analisis lewat tombol di atas, atau ketik /batal.");
+    return;
+  }
+
+  // --- Mode: sedang menunggu 1 foto chart (khusus mode Lengkap, untuk AI Price Action) ---
+  if (mode === "awaiting_chart") {
+    if (message.photo && message.photo.length > 0) {
+      const fileId = message.photo[message.photo.length - 1].file_id;
+      await addPhoto(env, chatId, fileId);
+      await sendMessage(env, chatId, "✅ Foto diterima. Memulai analisis...");
+      await beginAnalysis(env, chatId, null);
       return;
     }
 
     await sendMessage(
       env,
       chatId,
-      "Mohon kirim <b>foto chart</b> (bukan teks). Ketik /selesai jika sudah selesai kirim foto, atau /batal untuk keluar."
+      "Mohon kirim <b>1 foto chart</b> (bukan teks). Ketik /batal untuk membatalkan."
     );
-    return;
-  }
-
-  // --- Mode: sedang pilih jumlah AI, tapi user malah kirim teks ---
-  if (mode === "choosing_ai_count") {
-    await sendMessage(env, chatId, "Silakan pilih jumlah AI lewat tombol di atas, atau ketik /batal.");
     return;
   }
 
@@ -122,16 +129,26 @@ async function handleCallbackQuery(env, callbackQuery) {
     if (!VALID_TRADE_MODES.includes(tradeModeKey)) return;
 
     await setTradeMode(env, chatId, tradeModeKey);
-    await setMode(env, chatId, "awaiting_chart");
-    await editMessageText(env, chatId, messageId, signalTradePrompt(tradeModeKey), backOnlyKeyboard("back_main"));
+    await setMode(env, chatId, "awaiting_symbol");
+    await editMessageText(env, chatId, messageId, symbolPromptText(tradeModeKey), backOnlyKeyboard("back_main"));
     return;
   }
 
-  // --- Pilih jumlah AI analisa ---
-  if (data === "ai_count_5" || data === "ai_count_10") {
-    const aiCount = data === "ai_count_5" ? 5 : 10;
-    await editMessageText(env, chatId, messageId, "⏳ Memulai analisis, mohon tunggu...");
-    await startAnalysis(env, chatId, messageId, aiCount);
+  // --- Pilih mode analisis: Cepat vs Lengkap ---
+  if (data === "ai_mode_cepat" || data === "ai_mode_lengkap") {
+    const aiMode = data === "ai_mode_cepat" ? "cepat" : "lengkap";
+    await setAiMode(env, chatId, aiMode);
+
+    if (aiMode === "lengkap") {
+      const tradeMode = await getTradeMode(env, chatId);
+      await setMode(env, chatId, "awaiting_chart");
+      await editMessageText(env, chatId, messageId, chartPhotoPromptText(tradeMode), backOnlyKeyboard("back_main"));
+      return;
+    }
+
+    // Mode Cepat: langsung mulai, tidak perlu foto
+    await editMessageText(env, chatId, messageId, "⏳ Mengambil data pasar & memulai analisis...");
+    await beginAnalysis(env, chatId, messageId, null);
     return;
   }
 
@@ -166,5 +183,40 @@ async function handleCallbackQuery(env, callbackQuery) {
 
     default:
       await editMessageText(env, chatId, messageId, MAIN_MENU_TEXT, mainMenuKeyboard());
+  }
+}
+
+/**
+ * Ambil data pasar (candle + indikator + SMC + pivot + makro) lalu mulai
+ * proses multi-AI (dijalankan lewat Durable Object Alarm).
+ * Dipanggil baik dari mode Cepat (langsung setelah pilih mode analisis)
+ * maupun mode Lengkap (setelah foto chart diterima).
+ *
+ * @param {number|null} callbackMessageId - message_id dari pesan yang mau di-edit
+ *   (kalau dipicu dari callback query). Kalau null, kirim pesan baru dulu.
+ */
+async function beginAnalysis(env, chatId, callbackMessageId) {
+  const symbol = await getSymbol(env, chatId);
+  const tradeMode = await getTradeMode(env, chatId);
+
+  let messageId = callbackMessageId;
+  if (!messageId) {
+    const sent = await sendMessage(env, chatId, "⏳ Mengambil data pasar & memulai analisis...");
+    messageId = sent?.result?.message_id;
+  }
+
+  try {
+    const dataPackage = await buildMarketDataPackage(symbol, tradeMode);
+    await startAnalysis(env, chatId, messageId, dataPackage);
+  } catch (err) {
+    console.error("Gagal ambil data pasar:", err);
+    await editMessageText(
+      env,
+      chatId,
+      messageId,
+      `⚠️ Gagal ambil data pasar untuk <b>${symbol}</b>:\n${err.message}\n\nPastikan simbol benar (contoh: BTCUSDT) dan coba lagi lewat /start.`,
+      mainMenuKeyboard()
+    );
+    await resetSession(env, chatId);
   }
 }
