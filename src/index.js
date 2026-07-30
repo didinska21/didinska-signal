@@ -1,46 +1,35 @@
-import { fetchKlines } from "./binance.js";
-import { buildIndicatorSummary } from "./indicators.js";
-import { generateSignal } from "./groq.js";
-import { sendTelegramMessage } from "./telegram.js";
+import { handleUpdate } from "./handlers/router.js";
 
-async function runSignalPipeline(env) {
-  const symbol = env.SYMBOL || "BTCUSDT";
-  const interval = env.INTERVAL || "15m";
-  const limit = parseInt(env.CANDLE_LIMIT || "100", 10);
-
-  // 1. Ambil data candle
-  const candles = await fetchKlines(symbol, interval, limit);
-
-  // 2. Hitung indikator
-  const summary = buildIndicatorSummary(candles);
-
-  // 3. Generate narasi sinyal via Groq
-  const signalText = await generateSignal(env, symbol, summary);
-
-  // 4. Format pesan final untuk Telegram
-  const message = `<b>🔔 SINYAL FUTURES — ${symbol} (${interval})</b>\n\n${signalText}`;
-
-  // 5. Kirim ke Telegram
-  await sendTelegramMessage(env, message);
-
-  return { symbol, interval, summary, signalText };
-}
-
+/**
+ * Bot ini sekarang berbasis WEBHOOK (interaktif), bukan cron push otomatis.
+ * Telegram akan mengirim setiap update (pesan/klik tombol) ke endpoint ini
+ * secara real-time via POST request.
+ *
+ * Setup webhook cukup dilakukan SEKALI (lihat README) dengan membuka:
+ *   https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL_WORKER_INI>/telegram-webhook
+ */
 export default {
-  // Dipanggil otomatis sesuai jadwal cron di wrangler.toml
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(runSignalPipeline(env));
-  },
-
-  // Endpoint HTTP manual untuk testing: buka URL worker langsung di browser
   async fetch(request, env, ctx) {
-    try {
-      const result = await runSignalPipeline(env);
-      return new Response(JSON.stringify(result, null, 2), {
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (err) {
-      return new Response(`Error: ${err.message}`, { status: 500 });
+    const url = new URL(request.url);
+
+    if (request.method === "POST" && url.pathname === "/telegram-webhook") {
+      try {
+        const update = await request.json();
+        // waitUntil supaya Telegram cepat dapat response 200 OK,
+        // sementara proses balasan tetap jalan di background.
+        ctx.waitUntil(handleUpdate(env, update));
+        return new Response("OK");
+      } catch (err) {
+        console.error("Webhook error:", err);
+        return new Response("Error", { status: 500 });
+      }
     }
+
+    // Endpoint root: sekadar health-check manual, bukan trigger sinyal.
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response("Didinska Signal Bot is running. Webhook aktif di /telegram-webhook");
+    }
+
+    return new Response("Not found", { status: 404 });
   },
 };
