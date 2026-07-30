@@ -35,6 +35,26 @@ export async function getTradeMode(env, chatId) {
   return data.tradeMode;
 }
 
+export async function setSymbol(env, chatId, symbol) {
+  await getStub(env, chatId).fetch("https://session/setSymbol", {
+    method: "POST",
+    body: JSON.stringify({ symbol }),
+  });
+}
+
+export async function getSymbol(env, chatId) {
+  const res = await getStub(env, chatId).fetch("https://session/getSymbol");
+  const data = await res.json();
+  return data.symbol;
+}
+
+export async function setAiMode(env, chatId, aiMode) {
+  await getStub(env, chatId).fetch("https://session/setAiMode", {
+    method: "POST",
+    body: JSON.stringify({ aiMode }),
+  });
+}
+
 /** Tambah 1 foto, langsung dapat total terbaru (atomik, tidak perlu panggilan terpisah) */
 export async function addPhoto(env, chatId, fileId) {
   const res = await getStub(env, chatId).fetch("https://session/addPhoto", {
@@ -51,20 +71,14 @@ export async function countPhotos(env, chatId) {
   return data.total;
 }
 
-export async function listPhotos(env, chatId) {
-  const res = await getStub(env, chatId).fetch("https://session/listPhotos");
-  const data = await res.json();
-  return data.photos;
-}
-
 export async function resetSession(env, chatId) {
   await getStub(env, chatId).fetch("https://session/reset", { method: "POST" });
 }
 
 /** Mulai proses multi-AI analysis (dijalankan via Durable Object Alarm) */
-export async function startAnalysis(env, chatId, messageId, aiCount) {
+export async function startAnalysis(env, chatId, messageId, dataPackage) {
   await getStub(env, chatId).fetch("https://session/startAnalysis", {
     method: "POST",
-    body: JSON.stringify({ chatId, messageId, aiCount }),
+    body: JSON.stringify({ chatId, messageId, dataPackage }),
   });
 }
