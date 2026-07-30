@@ -21,7 +21,8 @@ src/
   menus.js                  # semua definisi teks & inline keyboard menu
   state.js                    # wrapper baca/tulis ke SessionDO (Durable Object)
   session_do.js                 # Durable Object: session per chat_id + mesin proses multi-AI (pakai Alarm)
-  handlers/router.js              # routing pesan & callback query
+  handlers/router.js              # routing pesan & callback query (+ whitelist chat_id)
+  htmlUtil.js                # escapeHtml() bersama, dipakai sebelum kirim teks apa pun (opini AI, error, dll) sebagai parse_mode HTML
 
   # --- Data pasar & indikator ---
   binance.js                 # fetch candle OHLCV (Binance Futures, fallback Bybit)
@@ -83,6 +84,16 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put GROQ_API_KEY
 ```
 
+**Keamanan (sangat disarankan):**
+```bash
+# Secret token acak untuk verifikasi webhook (tolak request yang bukan dari Telegram)
+npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
+
+# Batasi bot cuma bisa dipakai chat_id tertentu, dipisah koma. Cek chat_id
+# kamu lewat bot seperti @userinfobot.
+npx wrangler secret put ALLOWED_CHAT_IDS
+```
+
 **Soal rate limit Groq:** isi API key **terpisah per AI** (maksimal 11: 10 spesialis + 1 penyimpul) supaya tiap AI punya kuota sendiri. Kalau tidak diisi, otomatis fallback ke `GROQ_API_KEY`.
 
 ```bash
@@ -115,12 +126,21 @@ npm run deploy
 
 ### 4. Daftarkan webhook ke Telegram (WAJIB, cuma sekali)
 ```
-https://api.telegram.org/bot<TOKEN>/setWebhook?url=<WORKER_URL>/telegram-webhook
+https://api.telegram.org/bot<TOKEN>/setWebhook?url=<WORKER_URL>/telegram-webhook&secret_token=<TELEGRAM_WEBHOOK_SECRET>
 ```
+(Kalau tidak set `TELEGRAM_WEBHOOK_SECRET`, parameter `&secret_token=...` boleh dihilangkan — tapi endpoint jadi tidak terverifikasi.)
+
 Kalau berhasil, muncul respons `{"ok":true,"result":true,"description":"Webhook was set"}`.
 
 ### 5. Test
 Buka chat bot di Telegram, ketik `/start` → menu utama harus muncul dengan tombol.
+Kalau `ALLOWED_CHAT_IDS` sudah diisi dan chat_id kamu tidak ada di daftar, bot akan diam saja (tidak membalas apa pun).
+
+### 6. Jalankan unit test (opsional, tidak butuh deploy)
+```bash
+npm test
+```
+Menguji fungsi-fungsi indikator (`indicators.js`) dan heuristik Smart Money Concept (`smc.js`) pakai Node.js built-in test runner — tidak perlu install dependency tambahan.
 
 ## Batasan yang perlu diketahui
 - Deteksi Smart Money Concepts (`smc.js`) adalah **heuristik sederhana** berbasis aturan harga, bukan implementasi presisi institusional. Berguna sebagai konteks tambahan, bukan sinyal pasti.
