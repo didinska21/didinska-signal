@@ -1,6 +1,6 @@
 /**
  * Durable Object untuk session per chat_id, SEKALIGUS mesin proses
- * "multi-AI analysis" (AI 1 -> AI 2 -> ... -> AI Penyimpul).
+ * "multi-AI analysis" (AI spesialis 1 -> 2 -> ... -> AI Penyimpul).
  *
  * Kenapa proses AI-nya juga di sini (bukan langsung di webhook handler)?
  * Karena proses 5-10 AI berurutan + jeda 1-2 detik bisa makan waktu lebih
@@ -12,6 +12,8 @@
  */
 import { editMessageText } from "./telegram.js";
 import { analyzeChartImages, summarizeSignals } from "./groqVision.js";
+import { analyzeWithGroqText } from "./groqText.js";
+import { getAnalystsForMode } from "./analysts.js";
 import { mainMenuKeyboard } from "./menus.js";
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
@@ -49,6 +51,23 @@ export class SessionDO {
         return Response.json({ tradeMode });
       }
 
+      case "setSymbol": {
+        const { symbol } = await request.json();
+        await this.storage.put("symbol", symbol);
+        return Response.json({ ok: true });
+      }
+
+      case "getSymbol": {
+        const symbol = await this.storage.get("symbol");
+        return Response.json({ symbol });
+      }
+
+      case "setAiMode": {
+        const { aiMode } = await request.json();
+        await this.storage.put("aiMode", aiMode);
+        return Response.json({ ok: true });
+      }
+
       case "addPhoto": {
         const { fileId } = await request.json();
         const photos = (await this.storage.get("photos")) || [];
@@ -62,31 +81,32 @@ export class SessionDO {
         return Response.json({ total: photos.length });
       }
 
-      case "listPhotos": {
-        const photos = (await this.storage.get("photos")) || [];
-        return Response.json({ photos });
-      }
-
       case "reset": {
         await this.storage.put("mode", "idle");
         await this.storage.delete("photos");
         await this.storage.delete("tradeMode");
+        await this.storage.delete("symbol");
+        await this.storage.delete("aiMode");
         await this.storage.delete("job");
         await this.storage.deleteAlarm();
         return Response.json({ ok: true });
       }
 
       case "startAnalysis": {
-        const { chatId, messageId, aiCount } = await request.json();
+        const { chatId, messageId, dataPackage } = await request.json();
         const photos = (await this.storage.get("photos")) || [];
         const tradeMode = (await this.storage.get("tradeMode")) || "scalping";
+        const symbol = (await this.storage.get("symbol")) || "";
+        const aiMode = (await this.storage.get("aiMode")) || "lengkap";
 
         await this.storage.put("job", {
           chatId,
           messageId,
-          aiCount,
+          aiMode,
           tradeMode,
+          symbol,
           photos,
+          dataPackage,
           step: 0,
           opinions: [],
         });
@@ -111,27 +131,44 @@ export class SessionDO {
     const job = await this.storage.get("job");
     if (!job) return; // sudah selesai / dibatalkan lewat /batal
 
-    const { chatId, messageId, aiCount, tradeMode, photos, step, opinions } = job;
+    const { chatId, messageId, aiMode, tradeMode, symbol, photos, dataPackage, step, opinions } = job;
+    const analystsList = getAnalystsForMode(aiMode);
 
     try {
-      if (step < aiCount) {
-        // --- Langkah: 1 AI analyst menganalisa ---
+      if (step < analystsList.length) {
+        const analyst = analystsList[step];
+
+        // --- Langkah: 1 AI spesialis menganalisa ---
         await safeEdit(
           this.env,
           chatId,
           messageId,
-          `🤖 AI ${step + 1}/${aiCount} sedang menganalisa chart...`
+          `🤖 AI ${step + 1}/${analystsList.length} — <b>${escapeHtml(analyst.title)}</b> sedang menganalisa...`
         );
 
-        const opinion = await analyzeChartImages(this.env, photos, tradeMode, step + 1);
-        opinions.push(opinion);
+        let opinionText;
+        if (analyst.kind === "photo") {
+          opinionText = await analyzeChartImages(this.env, photos, tradeMode, analyst.number, symbol);
+        } else {
+          const systemPrompt = analyst.buildSystemPrompt(symbol, tradeMode);
+          const dataSlice = analyst.buildDataSlice(dataPackage);
+          opinionText = await analyzeWithGroqText(
+            this.env,
+            analyst.number,
+            systemPrompt,
+            dataSlice,
+            `AI ${analyst.number} - ${analyst.title}`
+          );
+        }
 
-        const preview = opinion.length > 250 ? opinion.slice(0, 250) + "..." : opinion;
+        opinions.push({ label: `AI ${analyst.number} (${analyst.title})`, opinion: opinionText });
+
+        const preview = opinionText.length > 220 ? opinionText.slice(0, 220) + "..." : opinionText;
         await safeEdit(
           this.env,
           chatId,
           messageId,
-          `✅ AI ${step + 1}/${aiCount} selesai:\n\n<i>${escapeHtml(preview)}</i>`
+          `✅ AI ${step + 1}/${analystsList.length} — <b>${escapeHtml(analyst.title)}</b> selesai:\n\n<i>${escapeHtml(preview)}</i>`
         );
 
         job.step = step + 1;
@@ -141,15 +178,15 @@ export class SessionDO {
         return;
       }
 
-      // --- Semua AI analyst selesai -> giliran AI Penyimpul ---
+      // --- Semua AI spesialis selesai -> giliran AI Penyimpul ---
       await safeEdit(
         this.env,
         chatId,
         messageId,
-        `🧠 AI Penyimpul sedang merangkum ${aiCount} hasil analisa menjadi 1 sinyal final...`
+        `🧠 AI Penyimpul sedang merangkum ${analystsList.length} hasil analisa jadi 1 keputusan final...`
       );
 
-      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode);
+      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol);
 
       await safeEdit(this.env, chatId, messageId, finalSignal, mainMenuKeyboard());
 
@@ -158,6 +195,8 @@ export class SessionDO {
       await this.storage.put("mode", "idle");
       await this.storage.delete("photos");
       await this.storage.delete("tradeMode");
+      await this.storage.delete("symbol");
+      await this.storage.delete("aiMode");
     } catch (err) {
       console.error("Analysis alarm error:", err);
       await safeEdit(
