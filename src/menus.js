@@ -1,6 +1,5 @@
 /**
  * Definisi seluruh menu (inline keyboard) bot.
- * Terpusat di satu file supaya gampang ditambah/diubah nanti.
  */
 
 export const MAIN_MENU_TEXT = `👋 <b>Selamat datang di Didinska Signal Bot</b>
@@ -16,6 +15,7 @@ export function mainMenuKeyboard() {
   };
 }
 
+// --- Jadwal News ---
 export const NEWS_MENU_TEXT = `📅 <b>Jadwal News</b>
 
 Pilih kalender ekonomi yang ingin dilihat:`;
@@ -36,12 +36,6 @@ export function newsMenuKeyboard() {
   };
 }
 
-export function backOnlyKeyboard(target = "menu_news") {
-  return {
-    inline_keyboard: [[{ text: "⬅️ Kembali", callback_data: target }]],
-  };
-}
-
 export const NEWS_ITEM_LABELS = {
   news_fomc: "FOMC (Federal Open Market Committee)",
   news_nfp: "NFP (Non-Farm Payroll)",
@@ -49,11 +43,58 @@ export const NEWS_ITEM_LABELS = {
   news_cpi: "CPI (Consumer Price Index)",
 };
 
-export const SIGNAL_TRADE_PROMPT = `📈 <b>Signal Trade</b>
+export function backOnlyKeyboard(target = "menu_news") {
+  return {
+    inline_keyboard: [[{ text: "⬅️ Kembali", callback_data: target }]],
+  };
+}
 
-Kirim <b>foto chart</b> yang ingin dianalisis.
+// --- Signal Trade: pilih mode trading dulu ---
+export const TRADE_MODES = {
+  scalping: { label: "⚡ Scalping", tfHint: "1m, 5m, 15m" },
+  daytrade: { label: "📊 Day Trade", tfHint: "15m, 1H, 4H" },
+  swing: { label: "📈 Swing", tfHint: "4H, 1D, 1W" },
+};
 
-Untuk hasil lebih akurat, kirim beberapa foto dari <b>timeframe berbeda</b> (misal: 15m, 1H, 4H) satu per satu.
+export const TRADE_MODE_SELECT_TEXT = `📈 <b>Signal Trade</b>
 
-Setelah semua foto terkirim, ketik /selesai untuk memproses.
+Pilih mode trading:`;
+
+export function tradeModeKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: TRADE_MODES.scalping.label, callback_data: "mode_scalping" }],
+      [{ text: TRADE_MODES.daytrade.label, callback_data: "mode_daytrade" }],
+      [{ text: TRADE_MODES.swing.label, callback_data: "mode_swing" }],
+      [{ text: "⬅️ Kembali", callback_data: "back_main" }],
+    ],
+  };
+}
+
+export function signalTradePrompt(tradeModeKey) {
+  const mode = TRADE_MODES[tradeModeKey];
+  return `📈 <b>Signal Trade — ${mode.label}</b>
+
+Timeframe disarankan: <b>${mode.tfHint}</b>
+
+Kirim <b>foto chart</b> sesuai timeframe di atas (boleh lebih dari 1 foto, kirim satu per satu, maksimal 5 foto karena batas dari AI vision-nya).
+
+Setelah semua foto terkirim, ketik /selesai untuk lanjut.
 Ketik /batal untuk membatalkan.`;
+}
+
+// --- Pilih jumlah AI analisa ---
+export const AI_COUNT_PROMPT_TEXT = `📥 Foto chart diterima.
+
+Pilih jumlah AI yang akan menganalisa chart kamu. Tiap AI akan kasih opini terpisah (loading satu-satu), lalu 1 <b>AI Penyimpul</b> merangkum semuanya jadi 1 sinyal final:`;
+
+export function aiCountKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "🤖 5 AI", callback_data: "ai_count_5" },
+        { text: "🤖 10 AI", callback_data: "ai_count_10" },
+      ],
+    ],
+  };
+}
