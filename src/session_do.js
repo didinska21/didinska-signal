@@ -15,6 +15,7 @@ import { analyzeChartImages, summarizeSignals } from "./groqVision.js";
 import { analyzeWithGroqText } from "./groqText.js";
 import { getAnalystsForMode } from "./analysts.js";
 import { mainMenuKeyboard } from "./menus.js";
+import { escapeHtml } from "./htmlUtil.js";
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
 
@@ -188,7 +189,10 @@ export class SessionDO {
 
       const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol);
 
-      await safeEdit(this.env, chatId, messageId, finalSignal, mainMenuKeyboard());
+      // Escape dulu sebelum dikirim (parse_mode: HTML) — teks dari AI bisa
+      // saja mengandung karakter "<" / "&" (misal "RSI < 30") yang bikin
+      // Telegram reject seluruh pesan kalau tidak di-escape.
+      await safeEdit(this.env, chatId, messageId, escapeHtml(finalSignal), mainMenuKeyboard());
 
       // Beres — bersihkan job & session
       await this.storage.delete("job");
@@ -203,7 +207,7 @@ export class SessionDO {
         this.env,
         chatId,
         messageId,
-        `⚠️ Terjadi kesalahan saat proses analisis:\n${err.message}\n\nSilakan coba lagi lewat /start.`,
+        `⚠️ Terjadi kesalahan saat proses analisis:\n${escapeHtml(err.message)}\n\nSilakan coba lagi lewat /start.`,
         mainMenuKeyboard()
       );
       await this.storage.delete("job");
@@ -223,6 +227,3 @@ async function safeEdit(env, chatId, messageId, text, replyMarkup) {
   }
 }
 
-function escapeHtml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
