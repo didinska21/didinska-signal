@@ -12,7 +12,7 @@ compatibility_date = "2024-11-01"
 # lalu isi "id" di bawah ini dengan id yang muncul dari command tersebut.
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "ISI_DENGAN_ID_KV_NAMESPACE_KAMU"
+id = "05492fa0fc73442289c7af8a41aa8d80"
 
 [vars]
 # Masih dipertahankan untuk dipakai lagi nanti saat fitur analisis chart aktif
