@@ -15,7 +15,7 @@ import { analyzeChartImages, summarizeSignals } from "./groqVision.js";
 import { analyzeWithGroqText } from "./groqText.js";
 import { getAnalystsForMode } from "./analysts.js";
 import { mainMenuKeyboard } from "./menus.js";
-import { escapeHtml } from "./htmlUtil.js";
+import { escapeHtml, formatTelegramHtml } from "./htmlUtil.js";
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
 
@@ -91,6 +91,17 @@ export class SessionDO {
         await this.storage.delete("job");
         await this.storage.deleteAlarm();
         return Response.json({ ok: true });
+      }
+
+      case "setAccess": {
+        const { expiresAt } = await request.json();
+        await this.storage.put("access", { approved: true, expiresAt });
+        return Response.json({ ok: true });
+      }
+
+      case "getAccess": {
+        const access = (await this.storage.get("access")) || { approved: false, expiresAt: null };
+        return Response.json(access);
       }
 
       case "startAnalysis": {
@@ -169,7 +180,7 @@ export class SessionDO {
           this.env,
           chatId,
           messageId,
-          `✅ AI ${step + 1}/${analystsList.length} — <b>${escapeHtml(analyst.title)}</b> selesai:\n\n<i>${escapeHtml(preview)}</i>`
+          `✅ AI ${step + 1}/${analystsList.length} — <b>${escapeHtml(analyst.title)}</b> selesai:\n\n${formatTelegramHtml(preview)}`
         );
 
         job.step = step + 1;
@@ -189,10 +200,11 @@ export class SessionDO {
 
       const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol);
 
-      // Escape dulu sebelum dikirim (parse_mode: HTML) — teks dari AI bisa
-      // saja mengandung karakter "<" / "&" (misal "RSI < 30") yang bikin
-      // Telegram reject seluruh pesan kalau tidak di-escape.
-      await safeEdit(this.env, chatId, messageId, escapeHtml(finalSignal), mainMenuKeyboard());
+      // Escape dulu (parse_mode: HTML) supaya karakter "<" / "&" (misal "RSI < 30")
+      // tidak bikin Telegram reject pesan, LALU ubah gaya Markdown yang sering
+      // dipakai model ("**tebal**") jadi tag HTML asli (<b>) biar benar-benar tebal
+      // di Telegram, bukan tampil sebagai tanda bintang mentah.
+      await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignal), mainMenuKeyboard());
 
       // Beres — bersihkan job & session
       await this.storage.delete("job");
