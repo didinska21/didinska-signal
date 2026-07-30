@@ -80,6 +80,73 @@ export function bollingerBands(values, period = 20, stdDevMult = 2) {
   };
 }
 
+/** Stochastic Oscillator (%K, %D) */
+export function stochastic(candles, kPeriod = 14, dPeriod = 3) {
+  const kValues = [];
+  for (let i = kPeriod - 1; i < candles.length; i++) {
+    const slice = candles.slice(i - kPeriod + 1, i + 1);
+    const highestHigh = Math.max(...slice.map((c) => c.high));
+    const lowestLow = Math.min(...slice.map((c) => c.low));
+    const close = candles[i].close;
+    const k = highestHigh === lowestLow ? 50 : ((close - lowestLow) / (highestHigh - lowestLow)) * 100;
+    kValues.push(k);
+  }
+  const dValues = [];
+  for (let i = dPeriod - 1; i < kValues.length; i++) {
+    dValues.push(average(kValues.slice(i - dPeriod + 1, i + 1)));
+  }
+  return {
+    k: kValues[kValues.length - 1],
+    d: dValues[dValues.length - 1],
+  };
+}
+
+/** On-Balance Volume (OBV) — kembalikan nilai terakhir + arah tren OBV singkat */
+export function obv(candles) {
+  let value = 0;
+  const series = [0];
+  for (let i = 1; i < candles.length; i++) {
+    if (candles[i].close > candles[i - 1].close) value += candles[i].volume;
+    else if (candles[i].close < candles[i - 1].close) value -= candles[i].volume;
+    series.push(value);
+  }
+  const lookback = Math.min(10, series.length - 1);
+  const trendDelta = series[series.length - 1] - series[series.length - 1 - lookback];
+  return {
+    value: series[series.length - 1],
+    trend: trendDelta > 0 ? "naik" : trendDelta < 0 ? "turun" : "flat",
+  };
+}
+
+/**
+ * Pivot Points standar (klasik), dihitung dari 1 candle periode SEBELUMNYA
+ * (misal candle harian kemarin untuk pivot hari ini).
+ */
+export function pivotPoints(prevCandle) {
+  const { high, low, close } = prevCandle;
+  const pivot = (high + low + close) / 3;
+  const r1 = 2 * pivot - low;
+  const s1 = 2 * pivot - high;
+  const r2 = pivot + (high - low);
+  const s2 = pivot - (high - low);
+  const r3 = high + 2 * (pivot - low);
+  const s3 = low - 2 * (high - pivot);
+  return { pivot, r1, r2, r3, s1, s2, s3 };
+}
+
+/** Fibonacci Retracement dari swing high & swing low terakhir (lookback candle) */
+export function fibonacciRetracement(candles, lookback = 50) {
+  const slice = candles.slice(-lookback);
+  const swingHigh = Math.max(...slice.map((c) => c.high));
+  const swingLow = Math.min(...slice.map((c) => c.low));
+  const range = swingHigh - swingLow;
+  const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].reduce((acc, ratio) => {
+    acc[ratio] = swingHigh - range * ratio;
+    return acc;
+  }, {});
+  return { swingHigh, swingLow, levels };
+}
+
 /** Deteksi support & resistance sederhana dari swing high/low N candle terakhir */
 export function findSupportResistance(candles, lookback = 30) {
   const slice = candles.slice(-lookback);
@@ -103,21 +170,29 @@ export function buildIndicatorSummary(candles) {
 
   const ema20 = ema(closes, 20).at(-1);
   const ema50 = ema(closes, 50).at(-1);
+  const ema200 = closes.length >= 200 ? ema(closes, 200).at(-1) : null;
   const rsi14 = rsi(closes, 14);
   const macdData = macd(closes);
   const atr14 = atr(candles, 14);
   const bb = bollingerBands(closes, 20);
   const sr = findSupportResistance(candles, 30);
+  const stoch = stochastic(candles, 14, 3);
+  const obvData = obv(candles);
+  const fib = fibonacciRetracement(candles, 50);
 
   return {
     lastClose,
     ema20,
     ema50,
+    ema200,
     rsi14,
     macd: macdData,
     atr14,
     bollinger: bb,
     support: sr.support,
     resistance: sr.resistance,
+    stochastic: stoch,
+    obv: obvData,
+    fibonacci: fib,
   };
 }
