@@ -9,7 +9,7 @@
  */
 import { getFile } from "./telegram.js";
 
-const DEFAULT_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+const DEFAULT_VISION_MODEL = "qwen/qwen3.6-27b";
 const DEFAULT_SUMMARY_MODEL = "openai/gpt-oss-120b";
 
 // Tiap "AI analyst" dikasih sudut pandang beda, biar hasilnya bervariasi
