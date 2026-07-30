@@ -20,12 +20,6 @@ class_name = "SessionDO"
 tag = "v1"
 new_sqlite_classes = ["SessionDO"]
 
-[vars]
-# Masih dipertahankan untuk dipakai lagi nanti saat fitur analisis chart aktif
-SYMBOL = "BTCUSDT"
-INTERVAL = "15m"
-CANDLE_LIMIT = "100"
-
 # Secrets (set via CLI atau dashboard Cloudflare, JANGAN ditulis di sini):
 #   npx wrangler secret put GROQ_API_KEY
 #   npx wrangler secret put TELEGRAM_BOT_TOKEN
