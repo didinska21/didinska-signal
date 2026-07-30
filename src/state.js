@@ -1,30 +1,52 @@
 /**
  * Simpan/ambil session state per chat_id menggunakan Cloudflare KV.
- * Dibutuhkan karena Worker itu stateless — tanpa ini, bot tidak akan ingat
- * bahwa user sedang di tengah proses "kirim foto chart".
  *
- * Butuh binding KV bernama SESSIONS di wrangler.toml.
+ * PENTING soal desain penyimpanan foto:
+ * Foto TIDAK disimpan sebagai satu array di dalam satu key (read-modify-write),
+ * karena kalau user kirim beberapa foto dengan cepat, tiap foto diproses sebagai
+ * request terpisah dan bisa saling menimpa (race condition) akibat KV yang
+ * eventually-consistent. Sebagai gantinya, tiap foto disimpan sebagai KEY
+ * TERPISAH yang unik, supaya penulisannya independen dan tidak saling tabrakan.
  */
 
-const DEFAULT_SESSION = { mode: "idle", photos: [] };
-const SESSION_TTL_SECONDS = 60 * 30; // sesi kadaluarsa otomatis setelah 30 menit idle
+const SESSION_TTL_SECONDS = 60 * 30; // 30 menit
 
-export async function getSession(env, chatId) {
-  const raw = await env.SESSIONS.get(`session:${chatId}`);
-  if (!raw) return { ...DEFAULT_SESSION };
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return { ...DEFAULT_SESSION };
-  }
+// --- Mode (idle / awaiting_chart) ---
+export async function getMode(env, chatId) {
+  const mode = await env.SESSIONS.get(`mode:${chatId}`);
+  return mode || "idle";
 }
 
-export async function setSession(env, chatId, session) {
-  await env.SESSIONS.put(`session:${chatId}`, JSON.stringify(session), {
+export async function setMode(env, chatId, mode) {
+  await env.SESSIONS.put(`mode:${chatId}`, mode, { expirationTtl: SESSION_TTL_SECONDS });
+}
+
+// --- Foto chart (disimpan per-key, bukan array) ---
+export async function addPhoto(env, chatId, fileId) {
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await env.SESSIONS.put(`photo:${chatId}:${uniqueSuffix}`, fileId, {
     expirationTtl: SESSION_TTL_SECONDS,
   });
 }
 
+export async function listPhotos(env, chatId) {
+  const { keys } = await env.SESSIONS.list({ prefix: `photo:${chatId}:` });
+  const fileIds = await Promise.all(keys.map((k) => env.SESSIONS.get(k.name)));
+  return fileIds.filter(Boolean);
+}
+
+export async function countPhotos(env, chatId) {
+  const { keys } = await env.SESSIONS.list({ prefix: `photo:${chatId}:` });
+  return keys.length;
+}
+
+export async function clearPhotos(env, chatId) {
+  const { keys } = await env.SESSIONS.list({ prefix: `photo:${chatId}:` });
+  await Promise.all(keys.map((k) => env.SESSIONS.delete(k.name)));
+}
+
+// --- Reset total (dipanggil saat /start, /batal, atau selesai proses) ---
 export async function resetSession(env, chatId) {
-  await setSession(env, chatId, { ...DEFAULT_SESSION });
+  await setMode(env, chatId, "idle");
+  await clearPhotos(env, chatId);
 }
