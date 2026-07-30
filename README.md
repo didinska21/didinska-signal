@@ -1,94 +1,135 @@
-# Didinska Signal Bot (v2 — Bot Interaktif)
+# Didinska Signal Bot (v3 — Hybrid Multi-AI Specialist Signal Trade)
 
-Bot Telegram berbasis **menu interaktif**, bukan lagi push notifikasi otomatis.
-User membuka menu dengan `/start`, lalu memilih fitur yang diinginkan.
+Bot Telegram berbasis **menu interaktif** (webhook), dengan fitur andalan
+**Signal Trade**: 10 AI spesialis (masing-masing fokus di 1 dimensi analisis
+teknikal berbeda) menganalisa pasar secara paralel-berurutan, lalu 1 **AI
+Penyimpul** merangkum semuanya jadi 1 keputusan final (BUY/SELL/WAIT).
 
-## Perubahan dari versi sebelumnya
-- ❌ Tidak ada lagi cron yang otomatis kirim sinyal tiap 15 menit
-- ✅ Bot sekarang berbasis **webhook** — merespons saat user mengirim pesan/klik tombol
-- ✅ Ada sistem menu bertingkat (main menu → submenu)
-- ✅ Ada session state per user (disimpan di Cloudflare KV) supaya bot "ingat" konteks, misal saat user sedang di tengah proses kirim foto chart
+## Arsitektur Hybrid: API Data vs Foto
+- **9 dari 10 AI spesialis** bekerja dari **data JSON** (candle OHLCV +
+  indikator numerik dari Binance/Bybit) — akurat (baca angka persis, bukan
+  menebak dari gambar), murah, dan cepat.
+- **1 AI (Price Action)** tetap pakai **foto chart** dari user — karena pola
+  candlestick & chart pattern (Head & Shoulders, Flag, dll) lebih natural
+  dibaca visual daripada dari angka.
 
 ## Struktur
 ```
 src/
-  index.js          # entry point: terima webhook POST dari Telegram
-  telegram.js        # wrapper API Telegram (sendMessage, editMessageText, dll)
-  menus.js            # semua definisi teks & inline keyboard menu
-  state.js             # baca/tulis session per chat_id via KV
-  handlers/
-    router.js          # logika utama: routing pesan & callback query ke handler yang sesuai
-  binance.js, indicators.js, groq.js
-                       # BELUM dipakai di v2 ini — disiapkan untuk fitur
-                       # analisis chart (Signal Trade) tahap berikutnya
+  index.js              # entry point: terima webhook POST dari Telegram
+  telegram.js             # wrapper API Telegram (sendMessage, editMessageText, getFile, dll)
+  menus.js                  # semua definisi teks & inline keyboard menu
+  state.js                    # wrapper baca/tulis ke SessionDO (Durable Object)
+  session_do.js                 # Durable Object: session per chat_id + mesin proses multi-AI (pakai Alarm)
+  handlers/router.js              # routing pesan & callback query
+
+  # --- Data pasar & indikator ---
+  binance.js                 # fetch candle OHLCV (Binance Futures, fallback Bybit)
+  indicators.js                # EMA/RSI/MACD/ATR/Bollinger/Stochastic/OBV/Pivot/Fibonacci
+  smc.js                         # heuristik Smart Money Concept (Order Block, FVG, BoS, Liquidity Grab)
+  macroData.js                     # BTC Dominance (CoinGecko) & Fear/Greed Index (alternative.me)
+  marketData.js                      # orkestrator: gabungkan semua di atas jadi 1 paket data per simbol
+
+  # --- Pemanggilan AI ---
+  analysts.js                  # definisi 10 AI spesialis: peran, tugas, & builder prompt masing-masing
+  groqClient.js                  # shared: retry 429 (ikut header retry-after) + pemilihan API key per-AI
+  groqText.js                      # panggilan Groq untuk 9 AI berbasis data JSON
+  groqVision.js                      # panggilan Groq Vision untuk AI Price Action (foto) + AI Penyimpul
+
+  groq.js                     # TIDAK dipakai di alur aktif — sisa arsitektur v1, dibiarkan untuk referensi
 ```
+
+## Alur Signal Trade
+1. Pilih mode trading (Scalping / Day Trade / Swing) — menentukan timeframe yang dipakai
+2. Ketik simbol pair (misal `BTCUSDT`)
+3. Pilih mode analisis:
+   - 🚀 **Cepat** (5 AI): Trend, Momentum, Volatilitas, Support/Resistance, Risk Management — murni data API, tanpa foto
+   - 🔬 **Lengkap** (10 AI): tambahan Volume, Smart Money Concept, Price Action (perlu 1 foto), Multi-Timeframe Alignment, Konteks Makro
+4. (Khusus Lengkap) Kirim 1 foto chart
+5. Bot mengambil data pasar (candle + indikator + SMC + pivot + makro), lalu tiap AI spesialis menganalisa satu per satu (progres ditampilkan realtime)
+6. AI Penyimpul merangkum semua opini jadi 1 keputusan final: **BUY/SELL/WAIT**, Bias Arah, Level Kunci, Skenario Entry, Manajemen Risiko (SL/TP + R:R), dan estimasi Probabilitas
+
+## 10 AI Spesialis
+
+| # | Peran | Sumber Data |
+|---|---|---|
+| 1 | Trend (Moving Averages) | API — EMA20/50/200 |
+| 2 | Momentum (Oscillators) | API — RSI, MACD, Stochastic |
+| 3 | Volatilitas (Bands & ATR) | API — Bollinger Bands, ATR |
+| 4 | Volume (Aliran Uang) | API — OBV |
+| 5 | Support & Resistance | API — S/R historis, Pivot Points, Fibonacci |
+| 6 | Smart Money Concepts | API — Order Block, FVG, BoS, Liquidity Grab (heuristik) |
+| 7 | Price Action (Candlestick) | **Foto** |
+| 8 | Multi-Timeframe Alignment | API — bandingkan trend timeframe utama vs HTF |
+| 9 | Konteks Makro Kripto | API — BTC Dominance, Fear/Greed Index |
+| 10 | Risk Management | API — kalkulasi SL/TP berbasis ATR |
+
+> Menu Cepat menjalankan AI #1, 2, 3, 5, 10 saja. Menu Lengkap menjalankan semua 10 + AI Penyimpul.
 
 ## Menu yang sudah ada
 
 **Main Menu** (`/start`)
-- 📅 Jadwal News → submenu FOMC / NFP / PPI / CPI (klik = balasan "belum bisa digunakan, masih perbaikan")
-- 📈 Signal Trade → minta user kirim foto chart (bisa multi-foto/multi-timeframe), lalu ketik `/selesai`. Untuk saat ini baru **menerima & menghitung foto**, belum ada analisis (placeholder).
+- 📅 Jadwal News → submenu FOMC / NFP / PPI / CPI (masih placeholder, belum ambil data real)
+- 📈 Signal Trade → aktif penuh, lihat alur di atas
 
 ## Setup
 
-### 1. Buat KV Namespace (untuk session state)
-```bash
-npx wrangler kv namespace create SESSIONS
-```
-Copy `id` yang muncul, tempel ke `wrangler.toml` bagian `[[kv_namespaces]]`.
+### 1. Durable Object binding
+Sudah dikonfigurasi di `wrangler.toml` (`SESSION_DO` class `SessionDO`, migration `new_sqlite_classes`). Tidak perlu setup manual — cukup deploy.
 
 ### 2. Set secrets
 ```bash
-npx wrangler secret put GROQ_API_KEY
 npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put GROQ_API_KEY
 ```
-> `TELEGRAM_CHAT_ID` tidak dipakai lagi di v2 ini (dulu untuk push manual), boleh dihapus dari secrets kalau mau beres-beres.
 
-#### 2a. (Disarankan) API key terpisah per AI analyst — hindari rate limit
-Kalau semua AI (1-10) pakai `GROQ_API_KEY` yang sama, mereka berebut kuota akun Groq
-yang sama saat dipanggil berurutan → gampang kena `429 Too Many Requests` di tengah proses
-(AI 1 sukses, AI 2 dst gagal).
+**Soal rate limit Groq:** isi API key **terpisah per AI** (maksimal 11: 10 spesialis + 1 penyimpul) supaya tiap AI punya kuota sendiri. Kalau tidak diisi, otomatis fallback ke `GROQ_API_KEY`.
 
-Solusi: buat akun Groq tambahan (gratis), ambil API key masing-masing, lalu set sebagai
-secret terpisah untuk tiap nomor AI:
 ```bash
 npx wrangler secret put GROQ_API_KEY_1
 npx wrangler secret put GROQ_API_KEY_2
 npx wrangler secret put GROQ_API_KEY_3
-# ...dst sampai GROQ_API_KEY_10
-npx wrangler secret put GROQ_SUMMARIZER_API_KEY   # khusus AI Penyimpul
+npx wrangler secret put GROQ_API_KEY_4
+npx wrangler secret put GROQ_API_KEY_5
+npx wrangler secret put GROQ_API_KEY_6
+npx wrangler secret put GROQ_API_KEY_7
+npx wrangler secret put GROQ_API_KEY_8
+npx wrangler secret put GROQ_API_KEY_9
+npx wrangler secret put GROQ_API_KEY_10
+npx wrangler secret put GROQ_SUMMARIZER_API_KEY
 ```
-- Kalau `GROQ_API_KEY_<n>` tidak di-set untuk suatu nomor, AI itu otomatis fallback
-  pakai `GROQ_API_KEY` biasa (jadi tidak wajib isi ke-10nya sekaligus, bisa bertahap).
-- Kalau user pilih mode "5 AI", hanya `GROQ_API_KEY_1` s/d `GROQ_API_KEY_5` yang dipakai.
-- Kalau ada AI yang gagal dan pesan error muncul di Telegram, sekarang errornya juga
-  menyebutkan key mana yang dipakai (`GROQ_API_KEY_3` atau `GROQ_API_KEY (fallback)`),
-  jadi lebih mudah dilacak.
+
+> Kode juga otomatis **retry** kalau kena 429 (ikut header `retry-after` dari Groq, maksimal 3x percobaan), dan mendeteksi kalau AI Penyimpul (model reasoning) mengembalikan jawaban kosong karena token habis dipakai "berpikir".
+
+Opsional, kalau Groq deprecate model default:
+```bash
+npx wrangler secret put GROQ_VISION_MODEL     # dipakai AI Price Action
+npx wrangler secret put GROQ_SUMMARY_MODEL    # dipakai AI Penyimpul
+npx wrangler secret put GROQ_TEXT_MODEL       # dipakai 9 AI spesialis berbasis data JSON
+```
 
 ### 3. Deploy
 ```bash
 npm run deploy
 ```
-(atau otomatis via Cloudflare Git Integration seperti sebelumnya)
 
 ### 4. Daftarkan webhook ke Telegram (WAJIB, cuma sekali)
-Buka URL ini di browser (ganti `<TOKEN>` dan `<WORKER_URL>`):
 ```
 https://api.telegram.org/bot<TOKEN>/setWebhook?url=<WORKER_URL>/telegram-webhook
-```
-Contoh:
-```
-https://api.telegram.org/bot8035732233:AAF.../setWebhook?url=https://didinska-signal.mr-didinska21.workers.dev/telegram-webhook
 ```
 Kalau berhasil, muncul respons `{"ok":true,"result":true,"description":"Webhook was set"}`.
 
 ### 5. Test
 Buka chat bot di Telegram, ketik `/start` → menu utama harus muncul dengan tombol.
 
-## Roadmap berikutnya (belum dikerjakan, menunggu arahan)
+## Batasan yang perlu diketahui
+- Deteksi Smart Money Concepts (`smc.js`) adalah **heuristik sederhana** berbasis aturan harga, bukan implementasi presisi institusional. Berguna sebagai konteks tambahan, bukan sinyal pasti.
+- Data makro (`macroData.js`) fault-tolerant: kalau API BTC Dominance/Fear-Greed sedang down, field-nya jadi `null` dan AI 9 akan menyebutkan data tidak tersedia — proses tidak akan gagal total karena ini.
+- Binance Futures API kadang men-geoblock IP datacenter Cloudflare (403) — sudah ada fallback otomatis ke Bybit.
+
+## Roadmap berikutnya
 - [ ] Fungsi Jadwal News (FOMC/NFP/PPI/CPI) — ambil data kalender ekonomi real
-- [ ] Analisis multi-timeframe dari foto chart (pakai Groq Vision model)
 - [ ] Kemungkinan fitur tambahan lain (menyusul)
 
 ## Peringatan
-Analisis yang dihasilkan bot ini (nanti, saat fitur analisis aktif) adalah keluaran model AI — **bukan nasihat keuangan**. Risiko trading sepenuhnya ditanggung pengguna.
+Analisis yang dihasilkan bot ini adalah keluaran model AI berdasarkan probabilitas matematis — **bukan nasihat keuangan**. Risiko trading sepenuhnya ditanggung pengguna.
