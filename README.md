@@ -1,72 +1,73 @@
-# Futures Signal Bot
+# Didinska Signal Bot (v2 — Bot Interaktif)
 
-Bot sinyal trading futures otomatis. Alur: **Binance (data)** → **Groq (analisis AI)** → **Telegram (notifikasi)**, dijalankan berkala via **Cloudflare Workers Cron**, dan di-deploy otomatis lewat **GitHub Actions**.
+Bot Telegram berbasis **menu interaktif**, bukan lagi push notifikasi otomatis.
+User membuka menu dengan `/start`, lalu memilih fitur yang diinginkan.
+
+## Perubahan dari versi sebelumnya
+- ❌ Tidak ada lagi cron yang otomatis kirim sinyal tiap 15 menit
+- ✅ Bot sekarang berbasis **webhook** — merespons saat user mengirim pesan/klik tombol
+- ✅ Ada sistem menu bertingkat (main menu → submenu)
+- ✅ Ada session state per user (disimpan di Cloudflare KV) supaya bot "ingat" konteks, misal saat user sedang di tengah proses kirim foto chart
 
 ## Struktur
 ```
 src/
-  index.js       # entry point: cron handler + fetch handler (testing manual)
-  binance.js     # ambil data candle OHLCV
-  indicators.js  # EMA, RSI, MACD, ATR, Bollinger Bands, Support/Resistance
-  groq.js        # generate narasi sinyal via Groq LLM
-  telegram.js    # kirim pesan ke Telegram
-wrangler.toml    # konfigurasi Worker & jadwal cron
-.github/workflows/deploy.yml  # CI/CD auto-deploy
+  index.js          # entry point: terima webhook POST dari Telegram
+  telegram.js        # wrapper API Telegram (sendMessage, editMessageText, dll)
+  menus.js            # semua definisi teks & inline keyboard menu
+  state.js             # baca/tulis session per chat_id via KV
+  handlers/
+    router.js          # logika utama: routing pesan & callback query ke handler yang sesuai
+  binance.js, indicators.js, groq.js
+                       # BELUM dipakai di v2 ini — disiapkan untuk fitur
+                       # analisis chart (Signal Trade) tahap berikutnya
 ```
 
-## Setup Awal
+## Menu yang sudah ada
 
-### 1. Buat akun & ambil kredensial
-- **Groq**: buat API key di https://console.groq.com/keys
-- **Telegram**: buat bot via [@BotFather](https://t.me/BotFather) → dapatkan `TELEGRAM_BOT_TOKEN`. Tambahkan bot ke grup/channel, lalu ambil `chat_id` (bisa pakai https://api.telegram.org/bot<TOKEN>/getUpdates setelah kirim pesan apapun ke bot/grup).
-- **Cloudflare**: buat akun, catat `Account ID` (di dashboard), buat API Token dengan izin "Edit Workers".
+**Main Menu** (`/start`)
+- 📅 Jadwal News → submenu FOMC / NFP / PPI / CPI (klik = balasan "belum bisa digunakan, masih perbaikan")
+- 📈 Signal Trade → minta user kirim foto chart (bisa multi-foto/multi-timeframe), lalu ketik `/selesai`. Untuk saat ini baru **menerima & menghitung foto**, belum ada analisis (placeholder).
 
-### 2. Install & login
+## Setup
+
+### 1. Buat KV Namespace (untuk session state)
 ```bash
-cd futures-signal-bot
-npm install
-npx wrangler login
+npx wrangler kv namespace create SESSIONS
 ```
+Copy `id` yang muncul, tempel ke `wrangler.toml` bagian `[[kv_namespaces]]`.
 
-### 3. Set secrets (rahasia, tidak masuk ke repo)
+### 2. Set secrets
 ```bash
 npx wrangler secret put GROQ_API_KEY
 npx wrangler secret put TELEGRAM_BOT_TOKEN
-npx wrangler secret put TELEGRAM_CHAT_ID
 ```
+> `TELEGRAM_CHAT_ID` tidak dipakai lagi di v2 ini (dulu untuk push manual), boleh dihapus dari secrets kalau mau beres-beres.
 
-### 4. Testing lokal
-```bash
-npm run dev
-# buka http://localhost:8787 untuk trigger manual pipeline
-```
-
-### 5. Deploy manual (opsional, sebelum pakai CI/CD)
+### 3. Deploy
 ```bash
 npm run deploy
 ```
+(atau otomatis via Cloudflare Git Integration seperti sebelumnya)
 
-## Setup CI/CD (GitHub Actions)
-Tambahkan secrets berikut di **Settings → Secrets and variables → Actions** pada repo GitHub:
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
+### 4. Daftarkan webhook ke Telegram (WAJIB, cuma sekali)
+Buka URL ini di browser (ganti `<TOKEN>` dan `<WORKER_URL>`):
+```
+https://api.telegram.org/bot<TOKEN>/setWebhook?url=<WORKER_URL>/telegram-webhook
+```
+Contoh:
+```
+https://api.telegram.org/bot8035732233:AAF.../setWebhook?url=https://didinska-signal.mr-didinska21.workers.dev/telegram-webhook
+```
+Kalau berhasil, muncul respons `{"ok":true,"result":true,"description":"Webhook was set"}`.
 
-Setiap push ke branch `main` akan otomatis deploy ulang Worker.
+### 5. Test
+Buka chat bot di Telegram, ketik `/start` → menu utama harus muncul dengan tombol.
 
-> Catatan: secrets aplikasi (`GROQ_API_KEY`, `TELEGRAM_*`) **tidak** diatur lewat GitHub Actions — itu tersimpan langsung di Cloudflare (langkah 3), tidak perlu diulang tiap deploy.
-
-## Konfigurasi
-Edit `wrangler.toml` bagian `[vars]` dan `[triggers]` untuk mengubah:
-- `SYMBOL` — pair yang dipantau (misal `ETHUSDT`)
-- `INTERVAL` — timeframe candle (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`)
-- `crons` — frekuensi eksekusi
-
-## Roadmap Pengembangan (ide next steps)
-- [ ] Simpan histori sinyal ke Cloudflare KV/D1 untuk tracking win-rate
-- [ ] Tambah multi-symbol (loop beberapa pair dalam satu cron run)
-- [ ] Tambah filter volatilitas (skip sinyal jika ATR terlalu rendah/choppy)
-- [ ] Tambah command interaktif di Telegram (`/signal BTCUSDT`) via webhook
-- [ ] Tambah backtesting sederhana sebelum sinyal live dipakai
+## Roadmap berikutnya (belum dikerjakan, menunggu arahan)
+- [ ] Fungsi Jadwal News (FOMC/NFP/PPI/CPI) — ambil data kalender ekonomi real
+- [ ] Analisis multi-timeframe dari foto chart (pakai Groq Vision model)
+- [ ] Kemungkinan fitur tambahan lain (menyusul)
 
 ## Peringatan
-Sinyal yang dihasilkan adalah keluaran model AI berbasis indikator teknikal — **bukan nasihat keuangan**. Selalu gunakan manajemen risiko dan keputusan trading tetap tanggung jawab pengguna.
+Analisis yang dihasilkan bot ini (nanti, saat fitur analisis aktif) adalah keluaran model AI — **bukan nasihat keuangan**. Risiko trading sepenuhnya ditanggung pengguna.
