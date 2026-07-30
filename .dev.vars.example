@@ -3,6 +3,19 @@
 
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 
+# Opsional tapi SANGAT disarankan: secret token buat verifikasi webhook,
+# supaya endpoint /telegram-webhook menolak request yang bukan dari Telegram.
+# Isi dengan string acak (misal hasil `openssl rand -hex 32`), lalu daftarkan
+# lewat parameter &secret_token=... saat setWebhook (lihat README).
+TELEGRAM_WEBHOOK_SECRET=
+
+# Opsional: batasi bot ini cuma bisa dipakai chat_id tertentu (dipisah koma,
+# misal "111111111,222222222"). Kalau dikosongkan, bot terbuka untuk semua
+# orang yang chat — TIDAK disarankan karena tiap analisis memicu banyak
+# panggilan Groq API (biaya kuota). Chat_id Telegram-mu bisa dicek lewat
+# bot seperti @userinfobot.
+ALLOWED_CHAT_IDS=
+
 # --- Groq API Keys ---
 # GROQ_API_KEY = fallback / key dasar. WAJIB diisi.
 # Kalau HANYA field ini yang diisi, semua AI (1-10) + AI Penyimpul akan
