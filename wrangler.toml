@@ -7,12 +7,18 @@ compatibility_date = "2024-11-01"
 # [triggers]
 # crons = ["*/15 * * * *"]
 
-# KV Namespace untuk menyimpan session per user (state menu, foto chart yang dikirim, dll).
-# Buat dulu dengan: npx wrangler kv namespace create SESSIONS
-# lalu isi "id" di bawah ini dengan id yang muncul dari command tersebut.
-[[kv_namespaces]]
-binding = "SESSIONS"
-id = "05492fa0fc73442289c7af8a41aa8d80"
+# Durable Object untuk session per user (mode menu, foto chart yang dikirim, dll).
+# Dipakai (bukan KV) supaya hitungan foto tidak race condition saat user kirim
+# beberapa foto berturut-turut dengan cepat.
+[[durable_objects.bindings]]
+name = "SESSION_DO"
+class_name = "SessionDO"
+
+# Migration wajib ada saat pertama kali Durable Object class ini dideploy.
+# new_sqlite_classes dipakai supaya tetap gratis di Workers Free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionDO"]
 
 [vars]
 # Masih dipertahankan untuk dipakai lagi nanti saat fitur analisis chart aktif
@@ -23,4 +29,3 @@ CANDLE_LIMIT = "100"
 # Secrets (set via CLI atau dashboard Cloudflare, JANGAN ditulis di sini):
 #   npx wrangler secret put GROQ_API_KEY
 #   npx wrangler secret put TELEGRAM_BOT_TOKEN
-#   npx wrangler secret put TELEGRAM_CHAT_ID   <- bisa dihapus nanti, sudah tidak dipakai untuk push
