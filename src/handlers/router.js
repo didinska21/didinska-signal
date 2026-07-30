@@ -31,10 +31,34 @@ import {
   startAnalysis,
 } from "../state.js";
 import { buildMarketDataPackage, normalizeSymbol } from "../marketData.js";
+import { escapeHtml } from "../htmlUtil.js";
 
 const VALID_TRADE_MODES = ["scalping", "daytrade", "swing"];
 
+/**
+ * Cek apakah chat_id boleh pakai bot ini.
+ * Dikontrol lewat env var ALLOWED_CHAT_IDS, isi daftar chat_id dipisah koma
+ * (misal "111111,222222"). Kalau env var ini TIDAK diset sama sekali, bot
+ * tetap terbuka untuk semua orang (perilaku lama) — supaya tidak mengunci
+ * diri sendiri kalau lupa setup. Sangat disarankan untuk selalu diisi
+ * kalau bot ini dipakai pribadi/terbatas, karena tiap analisis memicu
+ * banyak panggilan Groq API (biaya kuota).
+ */
+function isAllowedChat(env, chatId) {
+  const raw = env.ALLOWED_CHAT_IDS;
+  if (!raw) return true;
+  const allowed = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return allowed.includes(String(chatId));
+}
+
 export async function handleUpdate(env, update) {
+  const chatId = update.callback_query?.message?.chat?.id ?? update.message?.chat?.id;
+
+  if (chatId !== undefined && !isAllowedChat(env, chatId)) {
+    console.warn(`Chat ${chatId} tidak ada di ALLOWED_CHAT_IDS, update diabaikan.`);
+    return; // diam saja, jangan balas apa pun ke chat yang tidak diizinkan
+  }
+
   if (update.callback_query) {
     return handleCallbackQuery(env, update.callback_query);
   }
@@ -214,7 +238,7 @@ async function beginAnalysis(env, chatId, callbackMessageId) {
       env,
       chatId,
       messageId,
-      `⚠️ Gagal ambil data pasar untuk <b>${symbol}</b>:\n${err.message}\n\nPastikan simbol benar (contoh: BTCUSDT) dan coba lagi lewat /start.`,
+      `⚠️ Gagal ambil data pasar untuk <b>${escapeHtml(symbol)}</b>:\n${escapeHtml(err.message)}\n\nPastikan simbol benar (contoh: BTCUSDT) dan coba lagi lewat /start.`,
       mainMenuKeyboard()
     );
     await resetSession(env, chatId);
