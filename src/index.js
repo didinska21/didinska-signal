@@ -1,5 +1,7 @@
 import { handleUpdate } from "./handlers/router.js";
 
+export { SessionDO } from "./session_do.js";
+
 /**
  * Bot ini sekarang berbasis WEBHOOK (interaktif), bukan cron push otomatis.
  * Telegram akan mengirim setiap update (pesan/klik tombol) ke endpoint ini
