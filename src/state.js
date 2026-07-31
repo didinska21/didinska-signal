@@ -71,6 +71,20 @@ export async function countPhotos(env, chatId) {
   return data.total;
 }
 
+/** Simpan message_id pesan konfirmasi foto, supaya foto berikutnya bisa EDIT pesan itu (bukan kirim baru) */
+export async function setPhotoPromptMsgId(env, chatId, messageId) {
+  await getStub(env, chatId).fetch("https://session/setPhotoPromptMsgId", {
+    method: "POST",
+    body: JSON.stringify({ messageId }),
+  });
+}
+
+export async function getPhotoPromptMsgId(env, chatId) {
+  const res = await getStub(env, chatId).fetch("https://session/getPhotoPromptMsgId");
+  const data = await res.json();
+  return data.messageId;
+}
+
 export async function resetSession(env, chatId) {
   await getStub(env, chatId).fetch("https://session/reset", { method: "POST" });
 }
