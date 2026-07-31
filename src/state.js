@@ -85,8 +85,12 @@ export async function getPhotoPromptMsgId(env, chatId) {
   return data.messageId;
 }
 
+/** Reset sesi. Balikin message_id pesan konfirmasi foto lama (kalau ada), supaya
+ * caller bisa melumpuhkan tombolnya (biar tombol basi nggak nyangkut di chat). */
 export async function resetSession(env, chatId) {
-  await getStub(env, chatId).fetch("https://session/reset", { method: "POST" });
+  const res = await getStub(env, chatId).fetch("https://session/reset", { method: "POST" });
+  const data = await res.json();
+  return data.photoPromptMsgId || null;
 }
 
 /** Mulai proses multi-AI analysis (dijalankan via Durable Object Alarm) */
