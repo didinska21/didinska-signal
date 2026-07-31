@@ -32,8 +32,8 @@ import {
   setAiMode,
   addPhoto,
   countPhotos,
+  claimPhotoPromptMsgId,
   setPhotoPromptMsgId,
-  getPhotoPromptMsgId,
   resetSession,
   startAnalysis,
 } from "../state.js";
@@ -126,30 +126,29 @@ async function handleMessage(env, message) {
   // analisis baru dijalankan setelah user tekan tombol "Analisa Sekarang".
   // Pesan konfirmasi di-EDIT di tempat tiap foto baru masuk (bukan kirim pesan
   // baru tiap kali), supaya chat tidak numpuk dan totalnya jelas kelihatan naik.
+  //
+  // CATATAN RACE CONDITION: kalau user kirim beberapa foto sekaligus (misal
+  // album), beberapa update webhook bisa diproses hampir bersamaan. Supaya
+  // tidak semuanya sama-sama bikin pesan baru sendiri-sendiri (karena belum
+  // sempat lihat pesan yang lain sudah dibuat), pakai pola "claim" atomik:
+  // cuma request PERTAMA yang boleh bikin pesan baru, request lainnya nunggu
+  // (polling singkat) sampai message_id itu siap, baru ikut EDIT pesan yang sama.
   if (mode === "awaiting_chart") {
     if (message.photo && message.photo.length > 0) {
       const fileId = message.photo[message.photo.length - 1].file_id;
       const total = await addPhoto(env, chatId, fileId);
+      const isLast = total >= MAX_CHART_PHOTOS;
+      const text = isLast
+        ? `✅ Foto ke-${total} diterima (batas maksimal ${MAX_CHART_PHOTOS} foto tercapai). Memulai analisis...`
+        : chartPhotoReceivedText(total);
+      const keyboard = isLast ? { inline_keyboard: [] } : chartPhotoKeyboard(total);
 
-      if (total >= MAX_CHART_PHOTOS) {
-        const promptMsgId = await getPhotoPromptMsgId(env, chatId);
-        const doneText = `✅ Foto ke-${total} diterima (batas maksimal ${MAX_CHART_PHOTOS} foto tercapai). Memulai analisis...`;
-        if (promptMsgId) {
-          await editMessageText(env, chatId, promptMsgId, doneText);
-        } else {
-          await sendMessage(env, chatId, doneText);
-        }
+      const promptMsgId = await resolvePhotoPromptMsgId(env, chatId, text, keyboard);
+      if (isLast) {
+        // Kalau ternyata tetep gagal dapat message_id (edge case langka), minimal
+        // beri tahu user lewat pesan baru supaya nggak diam saja.
+        if (!promptMsgId) await sendMessage(env, chatId, text);
         await beginAnalysis(env, chatId, null);
-        return;
-      }
-
-      const promptMsgId = await getPhotoPromptMsgId(env, chatId);
-      if (promptMsgId) {
-        await editMessageText(env, chatId, promptMsgId, chartPhotoReceivedText(total), chartPhotoKeyboard(total));
-      } else {
-        const sent = await sendMessage(env, chatId, chartPhotoReceivedText(total), chartPhotoKeyboard(total));
-        const newMsgId = sent?.result?.message_id;
-        if (newMsgId) await setPhotoPromptMsgId(env, chatId, newMsgId);
       }
       return;
     }
@@ -277,6 +276,48 @@ async function handleCallbackQuery(env, callbackQuery) {
  * @param {number|null} callbackMessageId - message_id dari pesan yang mau di-edit
  *   (kalau dipicu dari callback query). Kalau null, kirim pesan baru dulu.
  */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Pastikan cuma ADA SATU pesan "Foto ke-N diterima" per sesi, walau beberapa
+ * foto masuk hampir bersamaan (misal dikirim sebagai album). Pakai pola claim:
+ * - Kalau BELUM ada pesan sama sekali -> caller ini "menang", kirim pesan baru,
+ *   simpan message_id-nya, return id itu.
+ * - Kalau SUDAH ada -> langsung edit pesan itu, return id-nya.
+ * - Kalau lagi "PENDING" (request LAIN yang hampir bersamaan sedang dalam
+ *   proses kirim pesan baru) -> tunggu sebentar (polling), lalu coba lagi,
+ *   sampai id-nya siap dipakai buat edit.
+ */
+async function resolvePhotoPromptMsgId(env, chatId, text, keyboard) {
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const claim = await claimPhotoPromptMsgId(env, chatId);
+
+    if (claim.status === "ready") {
+      await editMessageText(env, chatId, claim.messageId, text, keyboard);
+      return claim.messageId;
+    }
+
+    if (claim.status === "claim") {
+      const sent = await sendMessage(env, chatId, text, keyboard);
+      const newMsgId = sent?.result?.message_id;
+      if (newMsgId) {
+        await setPhotoPromptMsgId(env, chatId, newMsgId);
+        return newMsgId;
+      }
+      // Kalau sendMessage entah kenapa gagal dapat message_id, lepas klaimnya
+      // (set ke null lagi) supaya tidak nyangkut "PENDING" selamanya.
+      await setPhotoPromptMsgId(env, chatId, null);
+      return null;
+    }
+
+    // status === "pending" -> foto lain lagi diproses duluan, tunggu sebentar
+    await sleep(150);
+  }
+  return null; // fallback langka: nyerah nunggu, biarkan router yang manggil menangani
+}
+
 async function beginAnalysis(env, chatId, callbackMessageId) {
   const symbol = await getSymbol(env, chatId);
   const tradeMode = await getTradeMode(env, chatId);
