@@ -1,6 +1,7 @@
 import { handleUpdate } from "./handlers/router.js";
 
 export { SessionDO } from "./session_do.js";
+export { SignalLogDO } from "./signal_log_do.js";
 
 /**
  * Bot ini sekarang berbasis WEBHOOK (interaktif), bukan cron push otomatis.
