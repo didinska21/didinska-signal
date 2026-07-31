@@ -17,6 +17,9 @@ import {
   aiModePromptText,
   aiModeKeyboard,
   chartPhotoPromptText,
+  chartPhotoReceivedText,
+  chartPhotoKeyboard,
+  MAX_CHART_PHOTOS,
 } from "../menus.js";
 import {
   getMode,
@@ -27,6 +30,7 @@ import {
   getSymbol,
   setAiMode,
   addPhoto,
+  countPhotos,
   resetSession,
   startAnalysis,
 } from "../state.js";
@@ -112,20 +116,32 @@ async function handleMessage(env, message) {
     return;
   }
 
-  // --- Mode: sedang menunggu 1 foto chart (khusus mode Lengkap, untuk AI Price Action) ---
+  // --- Mode: sedang menunggu foto chart (khusus mode Lengkap, untuk AI Price Action) ---
+  // Bisa terima lebih dari 1 foto (misal beda timeframe). Foto ditampung dulu,
+  // analisis baru dijalankan setelah user tekan tombol "Analisa Sekarang".
   if (mode === "awaiting_chart") {
     if (message.photo && message.photo.length > 0) {
       const fileId = message.photo[message.photo.length - 1].file_id;
-      await addPhoto(env, chatId, fileId);
-      await sendMessage(env, chatId, "✅ Foto diterima. Memulai analisis...");
-      await beginAnalysis(env, chatId, null);
+      const total = await addPhoto(env, chatId, fileId);
+
+      if (total >= MAX_CHART_PHOTOS) {
+        await sendMessage(
+          env,
+          chatId,
+          `✅ Foto ke-${total} diterima (batas maksimal ${MAX_CHART_PHOTOS} foto tercapai). Memulai analisis...`
+        );
+        await beginAnalysis(env, chatId, null);
+        return;
+      }
+
+      await sendMessage(env, chatId, chartPhotoReceivedText(total), chartPhotoKeyboard(total));
       return;
     }
 
     await sendMessage(
       env,
       chatId,
-      "Mohon kirim <b>1 foto chart</b> (bukan teks). Ketik /batal untuk membatalkan."
+      "Mohon kirim <b>foto chart</b> (bukan teks). Ketik /batal untuk membatalkan."
     );
     return;
   }
@@ -173,6 +189,28 @@ async function handleCallbackQuery(env, callbackQuery) {
     // Mode Cepat: langsung mulai, tidak perlu foto
     await editMessageText(env, chatId, messageId, "⏳ Mengambil data pasar & memulai analisis...");
     await beginAnalysis(env, chatId, messageId, null);
+    return;
+  }
+
+  // --- Tombol "Analisa Sekarang" (dari alur kirim foto chart mode Lengkap) ---
+  if (data === "analyze_now") {
+    const currentMode = await getMode(env, chatId);
+    if (currentMode !== "awaiting_chart") return; // tombol basi (sudah diproses/dibatalkan)
+
+    const total = await countPhotos(env, chatId);
+    if (total === 0) {
+      await editMessageText(
+        env,
+        chatId,
+        messageId,
+        "⚠️ Belum ada foto yang dikirim. Kirim minimal 1 foto chart dulu, baru tekan tombol ini.",
+        chartPhotoKeyboard(0)
+      );
+      return;
+    }
+
+    await editMessageText(env, chatId, messageId, `⏳ Mengambil data pasar & memulai analisis dengan ${total} foto...`);
+    await beginAnalysis(env, chatId, messageId);
     return;
   }
 
