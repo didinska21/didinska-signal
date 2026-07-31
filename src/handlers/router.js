@@ -21,7 +21,9 @@ import {
   chartPhotoReceivedText,
   chartPhotoKeyboard,
   MAX_CHART_PHOTOS,
+  riwayatStatsText,
 } from "../menus.js";
+import { listSignals, markSignalResult, summarizeSignalStats } from "../signalLog.js";
 import {
   getMode,
   setMode,
@@ -229,7 +231,39 @@ async function handleCallbackQuery(env, callbackQuery) {
     return;
   }
 
+  // --- Tombol "Tandai Hasil" di pesan sinyal (TP kena / SL kena) ---
+  if (data.startsWith("mark_win_") || data.startsWith("mark_loss_")) {
+    const isWin = data.startsWith("mark_win_");
+    const signalId = data.replace(isWin ? "mark_win_" : "mark_loss_", "");
+    const result = await markSignalResult(env, signalId, isWin ? "win" : "loss");
+
+    if (!result.ok) {
+      // Sinyal ini entah kenapa tidak ketemu di riwayat (harusnya jarang terjadi)
+      await editMessageReplyMarkup(env, chatId, messageId, mainMenuKeyboard());
+      return;
+    }
+
+    // Lepas tombol "Tandai Hasil" dari pesan itu (sudah ditandai, tidak boleh
+    // ditandai dua kali) — sisain menu utama biasa aja.
+    await editMessageReplyMarkup(env, chatId, messageId, mainMenuKeyboard());
+    await sendMessage(
+      env,
+      chatId,
+      isWin
+        ? "✅ Dicatat sebagai <b>Menang (TP)</b>. Makasih udah nandain, ini yang bikin data Riwayat & Akurasi jadi jujur 👍"
+        : "❌ Dicatat sebagai <b>Kalah (SL)</b>. Wajar, nggak semua sinyal akan tembus — yang penting risk management-nya udah dijaga."
+    );
+    return;
+  }
+
   switch (data) {
+    case "menu_riwayat": {
+      const entries = await listSignals(env, chatId);
+      const stats = summarizeSignalStats(entries);
+      await editMessageText(env, chatId, messageId, riwayatStatsText(stats), backOnlyKeyboard("back_main"));
+      return;
+    }
+
     case "menu_news":
       await editMessageText(env, chatId, messageId, NEWS_MENU_TEXT, newsMenuKeyboard());
       return;
