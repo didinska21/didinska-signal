@@ -84,6 +84,17 @@ export class SessionDO {
         return Response.json({ total });
       }
 
+      case "setPhotoPromptMsgId": {
+        const { messageId } = await request.json();
+        await this.storage.put("photoPromptMsgId", messageId);
+        return Response.json({ ok: true });
+      }
+
+      case "getPhotoPromptMsgId": {
+        const messageId = (await this.storage.get("photoPromptMsgId")) || null;
+        return Response.json({ messageId });
+      }
+
       case "countPhotos": {
         const photos = (await this.storage.get("photos")) || [];
         return Response.json({ total: photos.length });
@@ -92,6 +103,7 @@ export class SessionDO {
       case "reset": {
         await this.storage.put("mode", "idle");
         await this.storage.delete("photos");
+        await this.storage.delete("photoPromptMsgId");
         await this.storage.delete("tradeMode");
         await this.storage.delete("symbol");
         await this.storage.delete("aiMode");
@@ -130,6 +142,7 @@ export class SessionDO {
           opinions: [],
         });
         await this.storage.put("mode", "processing");
+        await this.storage.delete("photoPromptMsgId");
 
         // Trigger langkah pertama secepatnya
         await this.storage.setAlarm(Date.now());
@@ -205,13 +218,15 @@ export class SessionDO {
         `🧠 AI Penyimpul sedang merangkum ${analystsList.length} hasil analisa jadi 1 keputusan final...`
       );
 
-      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol);
+      const biasTally = tallyBias(opinions);
+      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally);
+      const finalSignalFixed = enforceBiasTally(finalSignal, biasTally, opinions.length);
 
       // Escape dulu (parse_mode: HTML) supaya karakter "<" / "&" (misal "RSI < 30")
       // tidak bikin Telegram reject pesan, LALU ubah gaya Markdown yang sering
       // dipakai model ("**tebal**") jadi tag HTML asli (<b>) biar benar-benar tebal
       // di Telegram, bukan tampil sebagai tanda bintang mentah.
-      await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignal), mainMenuKeyboard());
+      await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignalFixed), mainMenuKeyboard());
 
       // Beres — bersihkan job & session
       await this.storage.delete("job");
@@ -233,6 +248,49 @@ export class SessionDO {
       await this.storage.put("mode", "idle");
     }
   }
+}
+
+/**
+ * Hitung tally Bullish/Bearish/Netral dari kode, BUKAN dipercayakan ke AI
+ * Penyimpul menghitung sendiri (LLM sering salah jumlah kalau diminta hitung
+ * manual di tengah teks panjang). Tiap AI spesialis diwajibkan (lewat system
+ * prompt) mengakhiri jawabannya dengan baris persis "Bias: Bullish/Bearish/Netral",
+ * jadi di sini kita tinggal cari baris itu dengan regex.
+ * Kalau suatu opini entah kenapa tidak ikut format itu, dianggap Netral
+ * (fallback aman) — supaya totalnya tetap selalu sama dengan jumlah opini.
+ */
+const BIAS_LINE_RE = /Bias:\s*(Bullish|Bearish|Netral)\b/i;
+
+function tallyBias(opinions) {
+  const tally = { bullish: 0, bearish: 0, netral: 0 };
+  for (const op of opinions) {
+    const match = BIAS_LINE_RE.exec(op.opinion || "");
+    const bias = match ? match[1].toLowerCase() : "netral";
+    if (bias === "bullish") tally.bullish++;
+    else if (bias === "bearish") tally.bearish++;
+    else tally.netral++;
+  }
+  return tally;
+}
+
+/**
+ * Sisipkan/timpa rincian tally di baris "📈 Probabilitas: ..." dengan angka
+ * yang SUDAH PASTI benar (hasil hitungan kode), apa pun yang ditulis AI
+ * Penyimpul di baris itu. Ini jaring pengaman terakhir supaya user tidak
+ * pernah lagi melihat total yang tidak masuk akal (misal 7+6+2 = 15).
+ */
+function enforceBiasTally(text, tally, total) {
+  const tallyStr = `(${tally.bullish} Bullish, ${tally.bearish} Bearish, ${tally.netral} Netral dari total ${total} AI spesialis)`;
+  const probLineRe = /(📈\s*Probabilitas:[^\n]*)/i;
+
+  if (probLineRe.test(text)) {
+    return text.replace(probLineRe, (line) => {
+      const withoutOldParenthetical = line.replace(/\([^)]*\)\s*$/, "").trim();
+      return `${withoutOldParenthetical} ${tallyStr}`;
+    });
+  }
+
+  return `${text}\n\n📈 Probabilitas: ${tallyStr}`;
 }
 
 /** Edit pesan, tapi abaikan error "message is not modified" (bukan error fatal) */
