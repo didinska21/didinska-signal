@@ -11,8 +11,55 @@ export function mainMenuKeyboard() {
     inline_keyboard: [
       [{ text: "📅 Jadwal News", callback_data: "menu_news" }],
       [{ text: "📈 Signal Trade", callback_data: "menu_signal" }],
+      [{ text: "📊 Riwayat & Akurasi", callback_data: "menu_riwayat" }],
     ],
   };
+}
+
+/**
+ * Keyboard yang ditempel di pesan hasil sinyal: tombol buat user nandain
+ * sendiri hasil akhirnya (TP kena / SL kena), digabung sama menu utama
+ * biasa. Ini yang jadi data dasar hitungan win-rate beneran di menu Riwayat.
+ */
+export function signalResultKeyboard(signalId) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "✅ TP Kena (Menang)", callback_data: `mark_win_${signalId}` },
+        { text: "❌ SL Kena (Kalah)", callback_data: `mark_loss_${signalId}` },
+      ],
+      [{ text: "📅 Jadwal News", callback_data: "menu_news" }],
+      [{ text: "📈 Signal Trade", callback_data: "menu_signal" }],
+      [{ text: "📊 Riwayat & Akurasi", callback_data: "menu_riwayat" }],
+    ],
+  };
+}
+
+/** Teks ringkasan win-rate untuk menu "Riwayat & Akurasi" */
+export function riwayatStatsText(stats) {
+  const { total, win, loss, open, winRatePct } = stats;
+
+  if (total === 0) {
+    return `📊 <b>Riwayat & Akurasi</b>
+
+Belum ada sinyal yang tercatat. Coba "Signal Trade" dulu, nanti tiap hasil sinyal bisa kamu tandai (TP/SL kena) lewat tombol di pesannya — dari situ baru kelihatan win-rate yang sebenarnya (bukan tebakan AI).`;
+  }
+
+  const winRateLine =
+    winRatePct === null
+      ? "Belum ada yang ditandai hasilnya."
+      : `<b>${winRatePct}%</b> (dari ${win + loss} sinyal yang sudah ditandai)`;
+
+  return `📊 <b>Riwayat & Akurasi</b>
+
+Total sinyal tercatat: <b>${total}</b>
+✅ Menang (TP): ${win}
+❌ Kalah (SL): ${loss}
+⏳ Belum ditandai: ${open}
+
+📈 Win-rate: ${winRateLine}
+
+<i>Angka ini dari hasil yang KAMU tandai sendiri di tiap sinyal — bukan tebakan probabilitas dari AI. Makin rajin ditandai, makin akurat gambarannya.</i>`;
 }
 
 // --- Jadwal News ---
