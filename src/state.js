@@ -71,6 +71,20 @@ export async function countPhotos(env, chatId) {
   return data.total;
 }
 
+/**
+ * Klaim slot "pesan konfirmasi foto" secara atomik. Dipakai supaya kalau
+ * beberapa foto masuk hampir bersamaan (misal user kirim album), cuma SATU
+ * yang bikin pesan baru — sisanya nunggu id pesan itu siap lalu ikut EDIT
+ * pesan yang sama. Return salah satu dari:
+ *  - { status: "claim" }               -> caller ini yang harus bikin pesan baru
+ *  - { status: "pending" }             -> lagi ditunggu, request lain sedang bikin pesan
+ *  - { status: "ready", messageId }    -> sudah ada, tinggal edit pesan ini
+ */
+export async function claimPhotoPromptMsgId(env, chatId) {
+  const res = await getStub(env, chatId).fetch("https://session/claimPhotoPromptMsgId", { method: "POST" });
+  return res.json();
+}
+
 /** Simpan message_id pesan konfirmasi foto, supaya foto berikutnya bisa EDIT pesan itu (bukan kirim baru) */
 export async function setPhotoPromptMsgId(env, chatId, messageId) {
   await getStub(env, chatId).fetch("https://session/setPhotoPromptMsgId", {
