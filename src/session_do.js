@@ -14,8 +14,9 @@ import { editMessageText } from "./telegram.js";
 import { analyzeChartImages, summarizeSignals } from "./groqVision.js";
 import { analyzeWithGroqText } from "./groqText.js";
 import { getAnalystsForMode } from "./analysts.js";
-import { mainMenuKeyboard } from "./menus.js";
+import { mainMenuKeyboard, signalResultKeyboard } from "./menus.js";
 import { escapeHtml, formatTelegramHtml } from "./htmlUtil.js";
+import { logSignal } from "./signalLog.js";
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
 
@@ -247,11 +248,28 @@ export class SessionDO {
       const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally);
       const finalSignalFixed = enforceBiasTally(finalSignal, biasTally, opinions.length);
 
+      // --- Catat sinyal ini ke riwayat (fondasi win-rate BENERAN, bukan tebakan AI) ---
+      // WAIT tidak dicatat karena bukan keputusan entry yang bisa "menang/kalah".
+      const decisionMatch = /Keputusan:\s*(BUY|SELL|WAIT)/i.exec(finalSignalFixed);
+      const decision = decisionMatch ? decisionMatch[1].toUpperCase() : null;
+      let resultKeyboard = mainMenuKeyboard();
+      if (decision && decision !== "WAIT") {
+        const signalId = await logSignal(this.env, {
+          chatId,
+          symbol,
+          tradeMode,
+          aiMode,
+          decision,
+          createdAt: Date.now(),
+        });
+        resultKeyboard = signalResultKeyboard(signalId);
+      }
+
       // Escape dulu (parse_mode: HTML) supaya karakter "<" / "&" (misal "RSI < 30")
       // tidak bikin Telegram reject pesan, LALU ubah gaya Markdown yang sering
       // dipakai model ("**tebal**") jadi tag HTML asli (<b>) biar benar-benar tebal
       // di Telegram, bukan tampil sebagai tanda bintang mentah.
-      await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignalFixed), mainMenuKeyboard());
+      await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignalFixed), resultKeyboard);
 
       // Beres — bersihkan job & session
       await this.storage.delete("job");
