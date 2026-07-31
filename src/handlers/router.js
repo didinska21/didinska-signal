@@ -31,6 +31,8 @@ import {
   setAiMode,
   addPhoto,
   countPhotos,
+  setPhotoPromptMsgId,
+  getPhotoPromptMsgId,
   resetSession,
   startAnalysis,
 } from "../state.js";
@@ -119,22 +121,33 @@ async function handleMessage(env, message) {
   // --- Mode: sedang menunggu foto chart (khusus mode Lengkap, untuk AI Price Action) ---
   // Bisa terima lebih dari 1 foto (misal beda timeframe). Foto ditampung dulu,
   // analisis baru dijalankan setelah user tekan tombol "Analisa Sekarang".
+  // Pesan konfirmasi di-EDIT di tempat tiap foto baru masuk (bukan kirim pesan
+  // baru tiap kali), supaya chat tidak numpuk dan totalnya jelas kelihatan naik.
   if (mode === "awaiting_chart") {
     if (message.photo && message.photo.length > 0) {
       const fileId = message.photo[message.photo.length - 1].file_id;
       const total = await addPhoto(env, chatId, fileId);
 
       if (total >= MAX_CHART_PHOTOS) {
-        await sendMessage(
-          env,
-          chatId,
-          `✅ Foto ke-${total} diterima (batas maksimal ${MAX_CHART_PHOTOS} foto tercapai). Memulai analisis...`
-        );
+        const promptMsgId = await getPhotoPromptMsgId(env, chatId);
+        const doneText = `✅ Foto ke-${total} diterima (batas maksimal ${MAX_CHART_PHOTOS} foto tercapai). Memulai analisis...`;
+        if (promptMsgId) {
+          await editMessageText(env, chatId, promptMsgId, doneText);
+        } else {
+          await sendMessage(env, chatId, doneText);
+        }
         await beginAnalysis(env, chatId, null);
         return;
       }
 
-      await sendMessage(env, chatId, chartPhotoReceivedText(total), chartPhotoKeyboard(total));
+      const promptMsgId = await getPhotoPromptMsgId(env, chatId);
+      if (promptMsgId) {
+        await editMessageText(env, chatId, promptMsgId, chartPhotoReceivedText(total), chartPhotoKeyboard(total));
+      } else {
+        const sent = await sendMessage(env, chatId, chartPhotoReceivedText(total), chartPhotoKeyboard(total));
+        const newMsgId = sent?.result?.message_id;
+        if (newMsgId) await setPhotoPromptMsgId(env, chatId, newMsgId);
+      }
       return;
     }
 
