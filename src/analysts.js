@@ -15,7 +15,8 @@ function baseHeader(title, symbol, tradeMode) {
 Simbol: ${symbol}. Mode trading: ${tradeMode}.
 Analisa HANYA dari data JSON yang diberikan (jangan menebak di luar data itu).
 Beri opini SINGKAT (maksimal 5 kalimat): kesimpulan dari sudut pandang Anda, dan bias arah (Bullish/Bearish/Netral).
-Bahasa Indonesia, langsung ke inti, tanpa basa-basi.`;
+Bahasa Indonesia, langsung ke inti, tanpa basa-basi.
+WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" atau "Bias: Bearish" atau "Bias: Netral" (pilih satu, tanpa tambahan kata lain di baris itu — ini dipakai sistem untuk menghitung tally otomatis).`;
 }
 
 export const ANALYSTS = [
