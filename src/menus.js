@@ -103,9 +103,29 @@ export function aiModeKeyboard() {
 }
 
 // --- Prompt kirim foto (hanya untuk mode Lengkap, khusus AI Price Action) ---
+export const MAX_CHART_PHOTOS = 5;
+
 export function chartPhotoPromptText(tradeModeKey) {
   const mode = TRADE_MODES[tradeModeKey];
-  return `📸 Kirim <b>1 foto chart</b> (timeframe disarankan: <b>${mode.tfHint}</b>) khusus untuk AI Price Action.
+  return `📸 Kirim <b>foto chart</b> untuk AI Price Action (timeframe disarankan: <b>${mode.tfHint}</b>).
+
+Bisa kirim <b>lebih dari 1 foto</b> (misal beda timeframe), maksimal ${MAX_CHART_PHOTOS}. Kirim satu-satu, lalu tekan tombol <b>Analisa Sekarang</b> kalau sudah selesai.
 
 Ketik /batal untuk membatalkan.`;
+}
+
+// --- Konfirmasi tiap foto diterima, sambil kasih tombol buat mulai analisis ---
+export function chartPhotoReceivedText(total) {
+  return `✅ Foto ke-${total} diterima.
+
+Kirim foto lagi kalau masih ada (maks ${MAX_CHART_PHOTOS}), atau tekan tombol di bawah untuk mulai analisis.`;
+}
+
+export function chartPhotoKeyboard(total) {
+  return {
+    inline_keyboard: [
+      [{ text: `🔍 Analisa Sekarang (${total} foto)`, callback_data: "analyze_now" }],
+      [{ text: "⬅️ Batal", callback_data: "back_main" }],
+    ],
+  };
 }
