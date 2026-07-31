@@ -44,6 +44,25 @@ export async function editMessageText(env, chatId, messageId, text, replyMarkup 
   return call(env, "editMessageText", payload);
 }
 
+/**
+ * Lumpuhkan (hapus) inline keyboard pada pesan lama TANPA perlu tahu/ubah
+ * teksnya — dipakai saat sesi direset supaya tombol dari sesi sebelumnya
+ * (misal "Analisa Sekarang (2 foto)" yang ditinggal begitu saja) tidak bisa
+ * diklik lagi dan membingungkan user. Diam-diam abaikan kalau gagal (misal
+ * pesannya sudah dihapus / terlalu lama) — bukan hal kritis.
+ */
+export async function editMessageReplyMarkup(env, chatId, messageId, replyMarkup = null) {
+  try {
+    return await call(env, "editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup || { inline_keyboard: [] },
+    });
+  } catch (err) {
+    return null;
+  }
+}
+
 /** Wajib dipanggil setelah callback_query supaya tombol tidak "loading" terus di UI Telegram */
 export async function answerCallbackQuery(env, callbackQueryId, text = "") {
   return call(env, "answerCallbackQuery", {
