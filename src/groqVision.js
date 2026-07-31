@@ -26,7 +26,7 @@ function arrayBufferToBase64(buffer) {
 }
 
 async function telegramPhotosToDataUrls(env, fileIds) {
-  const limited = fileIds.slice(0, 5); // Groq membatasi maks 5 gambar per request
+  const limited = fileIds.slice(0, 3); // model Groq Vision (qwen3.6-27b) cuma support maks 3 gambar per request
   const urls = [];
   for (const fileId of limited) {
     const buffer = await getFile(env, fileId);
