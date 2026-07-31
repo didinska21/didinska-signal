@@ -71,10 +71,17 @@ export class SessionDO {
 
       case "addPhoto": {
         const { fileId } = await request.json();
-        const photos = (await this.storage.get("photos")) || [];
-        photos.push(fileId);
-        await this.storage.put("photos", photos);
-        return Response.json({ total: photos.length });
+        // Pakai transaction supaya read-modify-write ini atomik. Tanpa ini,
+        // 2 request "addPhoto" yang masuk hampir bersamaan (misal user kirim
+        // beberapa foto berurutan cepat) bisa saling selip di antara get()
+        // dan put(), sehingga salah satu foto hilang (lost update).
+        const total = await this.storage.transaction(async (txn) => {
+          const photos = (await txn.get("photos")) || [];
+          photos.push(fileId);
+          await txn.put("photos", photos);
+          return photos.length;
+        });
+        return Response.json({ total });
       }
 
       case "countPhotos": {
