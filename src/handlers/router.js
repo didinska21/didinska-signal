@@ -1,6 +1,7 @@
 import {
   sendMessage,
   editMessageText,
+  editMessageReplyMarkup,
   answerCallbackQuery,
   clearOldReplyKeyboard,
 } from "../telegram.js";
@@ -79,14 +80,16 @@ async function handleMessage(env, message) {
 
   // --- Perintah global ---
   if (text === "/start") {
-    await resetSession(env, chatId);
+    const oldPhotoPromptMsgId = await resetSession(env, chatId);
+    if (oldPhotoPromptMsgId) await editMessageReplyMarkup(env, chatId, oldPhotoPromptMsgId);
     await clearOldReplyKeyboard(env, chatId);
     await sendMessage(env, chatId, MAIN_MENU_TEXT, mainMenuKeyboard());
     return;
   }
 
   if (text === "/batal") {
-    await resetSession(env, chatId); // ini juga membatalkan proses AI kalau sedang berjalan
+    const oldPhotoPromptMsgId = await resetSession(env, chatId); // ini juga membatalkan proses AI kalau sedang berjalan
+    if (oldPhotoPromptMsgId) await editMessageReplyMarkup(env, chatId, oldPhotoPromptMsgId);
     await sendMessage(env, chatId, "❌ Dibatalkan. Kembali ke menu utama.", mainMenuKeyboard());
     return;
   }
@@ -232,10 +235,14 @@ async function handleCallbackQuery(env, callbackQuery) {
       await editMessageText(env, chatId, messageId, NEWS_MENU_TEXT, newsMenuKeyboard());
       return;
 
-    case "back_main":
-      await resetSession(env, chatId);
+    case "back_main": {
+      const oldPhotoPromptMsgId = await resetSession(env, chatId);
+      if (oldPhotoPromptMsgId && oldPhotoPromptMsgId !== messageId) {
+        await editMessageReplyMarkup(env, chatId, oldPhotoPromptMsgId);
+      }
       await editMessageText(env, chatId, messageId, MAIN_MENU_TEXT, mainMenuKeyboard());
       return;
+    }
 
     case "menu_signal":
       await editMessageText(env, chatId, messageId, TRADE_MODE_SELECT_TEXT, tradeModeKeyboard());
@@ -292,6 +299,9 @@ async function beginAnalysis(env, chatId, callbackMessageId) {
       `⚠️ Gagal ambil data pasar untuk <b>${escapeHtml(symbol)}</b>:\n${escapeHtml(err.message)}\n\nPastikan simbol benar (contoh: BTCUSDT) dan coba lagi lewat /start.`,
       mainMenuKeyboard()
     );
-    await resetSession(env, chatId);
+    const oldPhotoPromptMsgId = await resetSession(env, chatId);
+    if (oldPhotoPromptMsgId && oldPhotoPromptMsgId !== messageId) {
+      await editMessageReplyMarkup(env, chatId, oldPhotoPromptMsgId);
+    }
   }
 }
