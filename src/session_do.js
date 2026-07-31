@@ -101,6 +101,7 @@ export class SessionDO {
       }
 
       case "reset": {
+        const oldPhotoPromptMsgId = (await this.storage.get("photoPromptMsgId")) || null;
         await this.storage.put("mode", "idle");
         await this.storage.delete("photos");
         await this.storage.delete("photoPromptMsgId");
@@ -109,7 +110,7 @@ export class SessionDO {
         await this.storage.delete("aiMode");
         await this.storage.delete("job");
         await this.storage.deleteAlarm();
-        return Response.json({ ok: true });
+        return Response.json({ ok: true, photoPromptMsgId: oldPhotoPromptMsgId });
       }
 
       case "setAccess": {
