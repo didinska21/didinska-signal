@@ -84,15 +84,38 @@ export class SessionDO {
         return Response.json({ total });
       }
 
+      // --- Pola "claim" untuk photoPromptMsgId (lihat komentar di claimPhotoPromptMsgId) ---
+      case "claimPhotoPromptMsgId": {
+        const result = await this.storage.transaction(async (txn) => {
+          const current = await txn.get("photoPromptMsgId");
+          if (current && current !== "PENDING") {
+            return { status: "ready", messageId: current };
+          }
+          if (current === "PENDING") {
+            return { status: "pending" };
+          }
+          // Belum ada sama sekali -> request ini yang "menang", klaim slotnya
+          // dulu (supaya request lain yang hampir bersamaan tahu harus nunggu,
+          // bukan sama-sama bikin pesan baru sendiri-sendiri).
+          await txn.put("photoPromptMsgId", "PENDING");
+          return { status: "claim" };
+        });
+        return Response.json(result);
+      }
+
       case "setPhotoPromptMsgId": {
         const { messageId } = await request.json();
-        await this.storage.put("photoPromptMsgId", messageId);
+        if (messageId) {
+          await this.storage.put("photoPromptMsgId", messageId);
+        } else {
+          await this.storage.delete("photoPromptMsgId");
+        }
         return Response.json({ ok: true });
       }
 
       case "getPhotoPromptMsgId": {
         const messageId = (await this.storage.get("photoPromptMsgId")) || null;
-        return Response.json({ messageId });
+        return Response.json({ messageId: messageId === "PENDING" ? null : messageId });
       }
 
       case "countPhotos": {
@@ -101,7 +124,8 @@ export class SessionDO {
       }
 
       case "reset": {
-        const oldPhotoPromptMsgId = (await this.storage.get("photoPromptMsgId")) || null;
+        const storedPhotoPromptMsgId = (await this.storage.get("photoPromptMsgId")) || null;
+        const oldPhotoPromptMsgId = storedPhotoPromptMsgId === "PENDING" ? null : storedPhotoPromptMsgId;
         await this.storage.put("mode", "idle");
         await this.storage.delete("photos");
         await this.storage.delete("photoPromptMsgId");
