@@ -24,7 +24,7 @@ import {
   riwayatStatsText,
 } from "../menus.js";
 import { listSignals, markSignalResult, summarizeSignalStats } from "../signalLog.js";
-import { formatNewsScheduleText } from "../newsScheduleFormat.js";
+import { formatNewsScheduleText, formatUpcomingAllText } from "../newsScheduleFormat.js";
 import {
   getMode,
   setMode,
@@ -281,6 +281,11 @@ async function handleCallbackQuery(env, callbackQuery) {
     case "menu_signal":
       await editMessageText(env, chatId, messageId, TRADE_MODE_SELECT_TEXT, tradeModeKeyboard());
       return;
+
+    case "news_segera": {
+      await editMessageText(env, chatId, messageId, formatUpcomingAllText(), backOnlyKeyboard("menu_news"));
+      return;
+    }
 
     case "news_fomc":
     case "news_nfp":
