@@ -24,10 +24,44 @@ function formatWIB(utcIsoString) {
   return `${dayName}, ${date} ${month} ${year}, ${hour}:${minute} WIB`;
 }
 
+const CATEGORY_LABELS = {
+  fomc: "FOMC",
+  nfp: "NFP",
+  ppi: "PPI",
+  cpi: "CPI",
+};
+
 /**
- * Ambil & format jadwal untuk 1 kategori (fomc/nfp/ppi/cpi), yang BELUM
- * lewat aja (diurutkan dari yang paling dekat).
+ * Gabung SEMUA kategori (FOMC/NFP/PPI/CPI) jadi satu daftar, cuma yang
+ * belum lewat, diurutkan dari yang paling DEKAT dulu. Dipakai buat menu
+ * "⏰ Segera Terjadi".
  */
+export function formatUpcomingAllText() {
+  const now = Date.now();
+  const all = [];
+
+  for (const [key, isoList] of Object.entries(NEWS_SCHEDULE)) {
+    for (const utcIso of isoList) {
+      if (new Date(utcIso).getTime() >= now) {
+        all.push({ key, utcIso });
+      }
+    }
+  }
+
+  all.sort((a, b) => new Date(a.utcIso).getTime() - new Date(b.utcIso).getTime());
+
+  if (all.length === 0) {
+    return `⏰ <b>Segera Terjadi</b>
+
+Belum ada jadwal mendatang yang tercatat di kategori mana pun.`;
+  }
+
+  const lines = all.map((e) => `🔜 <b>${CATEGORY_LABELS[e.key]}</b> — ${formatWIB(e.utcIso)}`);
+
+  return `⏰ <b>Segera Terjadi</b>
+
+${lines.join("\n")}`;
+}
 export function formatNewsScheduleText(key, label) {
   const rawEvents = NEWS_SCHEDULE[key] || [];
   const now = Date.now();
