@@ -70,6 +70,7 @@ Pilih kalender ekonomi yang ingin dilihat:`;
 export function newsMenuKeyboard() {
   return {
     inline_keyboard: [
+      [{ text: "⏰ Segera Terjadi", callback_data: "news_segera" }],
       [
         { text: "FOMC", callback_data: "news_fomc" },
         { text: "NFP", callback_data: "news_nfp" },
