@@ -14,11 +14,26 @@ compatibility_date = "2024-11-01"
 name = "SESSION_DO"
 class_name = "SessionDO"
 
+# Durable Object GLOBAL (1 instance untuk semua chat) buat nyimpen riwayat
+# sinyal & hasilnya (TP/SL), dasar penghitungan win-rate beneran. Sengaja
+# dipisah dari SESSION_DO supaya riwayatnya tidak ikut kehapus tiap /start
+# atau /batal (yang mereset SESSION_DO).
+[[durable_objects.bindings]]
+name = "SIGNAL_LOG_DO"
+class_name = "SignalLogDO"
+
 # Migration wajib ada saat pertama kali Durable Object class ini dideploy.
 # new_sqlite_classes dipakai supaya tetap gratis di Workers Free plan.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionDO"]
+
+# Migration baru khusus buat SignalLogDO (class baru) — migration lama (v1)
+# JANGAN diubah/dihapus, Durable Object migration itu selalu nambah tag baru,
+# bukan mengedit yang sudah pernah dideploy.
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["SignalLogDO"]
 
 # Secrets (set via CLI atau dashboard Cloudflare, JANGAN ditulis di sini):
 #   npx wrangler secret put GROQ_API_KEY
