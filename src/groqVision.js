@@ -52,7 +52,8 @@ Analisa gambar chart yang diberikan. Fokus HANYA pada:
 - Pola chart klasik (Head & Shoulders, Flag, Triangle, dll) kalau terlihat
 - Struktur price action (higher high/low, lower high/low)
 Beri opini SINGKAT (maksimal 5 kalimat): bias arah, pola yang terdeteksi, dan area entry potensial berdasarkan pola tsb.
-Bahasa Indonesia, langsung ke inti, tanpa basa-basi.`;
+Bahasa Indonesia, langsung ke inti, tanpa basa-basi.
+WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" atau "Bias: Bearish" atau "Bias: Netral" (pilih satu, tanpa tambahan kata lain di baris itu — ini dipakai sistem untuk menghitung tally otomatis).`;
 
   const content = [
     { type: "text", text: "Analisa chart berikut:" },
@@ -83,17 +84,20 @@ Bahasa Indonesia, langsung ke inti, tanpa basa-basi.`;
  *
  * @param {Array<{label: string, opinion: string}>} opinions - opini tiap AI spesialis, dengan label perannya
  */
-export async function summarizeSignals(env, opinions, tradeMode, symbol) {
+export async function summarizeSignals(env, opinions, tradeMode, symbol, biasTally) {
   const apiKey = env.GROQ_SUMMARIZER_API_KEY || env.GROQ_API_KEY;
   const model = env.GROQ_SUMMARY_MODEL || DEFAULT_SUMMARY_MODEL;
 
-  const systemPrompt = `Anda adalah analis teknikal dan ahli perdagangan futures profesional yang bertugas SEBAGAI HAKIM/PENYIMPUL.
-Anda menerima TEPAT ${opinions.length} opini dari AI spesialis lain (diberi label AI 1, AI 2, dst di pesan user), masing-masing fokus di dimensi berbeda (trend, momentum, volatilitas, volume, support/resistance, smart money concept, price action, multi-timeframe, konteks makro, risk management). Bisa jadi ada yang berbeda pendapat.
+  const tallyLine = biasTally
+    ? `${biasTally.bullish} Bullish, ${biasTally.bearish} Bearish, ${biasTally.netral} Netral`
+    : null;
 
+  const systemPrompt = `Anda adalah analis teknikal dan ahli perdagangan futures profesional yang bertugas SEBAGAI HAKIM/PENYIMPUL.
+Anda menerima TEPAT ${opinions.length} opini dari AI spesialis lain, masing-masing fokus di dimensi berbeda (trend, momentum, volatilitas, volume, support/resistance, smart money concept, price action, multi-timeframe, konteks makro, risk management). Bisa jadi ada yang berbeda pendapat.
+${tallyLine ? `\nTally bias SUDAH DIHITUNG OTOMATIS OLEH SISTEM dari ${opinions.length} opini di atas (bukan tugas Anda menghitung ulang): ${tallyLine}. Pakai ini sebagai salah satu pertimbangan keputusan Anda.\n` : ""}
 Tugas Anda:
-1. Baca ULANG opini SATU-PER-SATU, klasifikasikan tiap opini sebagai Bullish, Bearish, atau Netral berdasarkan bias arah yang disebutkan di opininya. JANGAN sampai ada opini yang terlewat atau terhitung dua kali — total klasifikasi HARUS sama persis dengan ${opinions.length}.
-2. Timbang: berapa banyak sinyal Bullish vs Bearish vs Netral, dan apakah indikator Volume mendukung indikator Trend?
-3. Simpulkan jadi SATU keputusan tegas. Simbol: ${symbol || "-"}. Mode trading: ${tradeMode}.
+1. Timbang tally bias di atas, dan apakah indikator Volume mendukung indikator Trend.
+2. Simpulkan jadi SATU keputusan tegas. Simbol: ${symbol || "-"}. Mode trading: ${tradeMode}.
 
 Gunakan bahasa Indonesia yang profesional, ringkas, dan langsung pada intinya.
 
@@ -103,7 +107,7 @@ Format WAJIB jawaban (gunakan struktur ini persis):
 📍 Level Kunci: (Support & Resistance utama)
 🎯 Skenario Entry: (area Long/Short)
 🛡️ Manajemen Risiko: (Stop-Loss & Take-Profit yang logis, sebutkan rasio Risk:Reward)
-📈 Probabilitas: (perkiraan persentase keyakinan, misal "±65%". WAJIB sertakan rincian hasil klasifikasi Anda di langkah 1, formatnya "(X Bullish, Y Bearish, Z Netral dari total ${opinions.length} AI spesialis)" — X+Y+Z harus sama dengan ${opinions.length})
+📈 Probabilitas: (HANYA tulis perkiraan persentase keyakinan, misal "±65%" — JANGAN tulis rincian jumlah AI di baris ini, itu akan ditambahkan otomatis oleh sistem)
 
 Akhiri dengan satu kalimat: sebutkan ini hasil gabungan ${opinions.length} AI spesialis, berdasarkan probabilitas matematis, dan risiko sepenuhnya ditanggung trader.`;
 
