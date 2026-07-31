@@ -24,6 +24,7 @@ import {
   riwayatStatsText,
 } from "../menus.js";
 import { listSignals, markSignalResult, summarizeSignalStats } from "../signalLog.js";
+import { formatNewsScheduleText } from "../newsScheduleFormat.js";
 import {
   getMode,
   setMode,
@@ -285,12 +286,13 @@ async function handleCallbackQuery(env, callbackQuery) {
     case "news_nfp":
     case "news_ppi":
     case "news_cpi": {
+      const key = data.replace("news_", "");
       const label = NEWS_ITEM_LABELS[data];
       await editMessageText(
         env,
         chatId,
         messageId,
-        `📌 <b>${label}</b>\n\n⚙️ Fitur ini belum bisa digunakan, masih menunggu perbaikan.`,
+        formatNewsScheduleText(key, label),
         backOnlyKeyboard("menu_news")
       );
       return;
