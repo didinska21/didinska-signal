@@ -103,7 +103,7 @@ export function aiModeKeyboard() {
 }
 
 // --- Prompt kirim foto (hanya untuk mode Lengkap, khusus AI Price Action) ---
-export const MAX_CHART_PHOTOS = 5;
+export const MAX_CHART_PHOTOS = 3; // model Groq Vision (qwen3.6-27b) cuma support maks 3 gambar per request
 
 export function chartPhotoPromptText(tradeModeKey) {
   const mode = TRADE_MODES[tradeModeKey];
