@@ -83,3 +83,31 @@ async function fetchFromBybit(symbol, interval, limit) {
     }))
     .reverse();
 }
+
+/**
+ * Ambil harga terkini (mark price / last price) tanpa perlu tarik candle
+ * penuh — dipakai buat cek cepat apakah suatu level TP/SL sudah tersentuh.
+ * Fallback ke Bybit kalau Binance gagal, sama seperti fetchKlines.
+ */
+export async function fetchCurrentPrice(symbol) {
+  try {
+    const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Accept: "application/json",
+      },
+    });
+    if (!res.ok) throw new Error(`Binance ticker error: ${res.status}`);
+    const data = await res.json();
+    return parseFloat(data.price);
+  } catch (err) {
+    console.warn(`Binance ticker gagal (${err.message}), fallback ke Bybit...`);
+    const res = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(`Bybit ticker error: ${res.status}`);
+    const data = await res.json();
+    if (data.retCode !== 0) throw new Error(`Bybit ticker error: ${data.retMsg}`);
+    return parseFloat(data.result.list[0].lastPrice);
+  }
+}
