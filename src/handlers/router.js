@@ -39,6 +39,9 @@ import {
   setPhotoPromptMsgId,
   resetSession,
   startAnalysis,
+  startAutoSignal,
+  stopAutoSignal,
+  getAutoMode,
 } from "../state.js";
 import { buildMarketDataPackage, normalizeSymbol } from "../marketData.js";
 import { escapeHtml } from "../htmlUtil.js";
@@ -94,6 +97,40 @@ async function handleMessage(env, message) {
     const oldPhotoPromptMsgId = await resetSession(env, chatId); // ini juga membatalkan proses AI kalau sedang berjalan
     if (oldPhotoPromptMsgId) await editMessageReplyMarkup(env, chatId, oldPhotoPromptMsgId);
     await sendMessage(env, chatId, "❌ Dibatalkan. Kembali ke menu utama.", mainMenuKeyboard());
+    return;
+  }
+
+  if (text === "/auto") {
+    const alreadyOn = await getAutoMode(env, chatId);
+    if (alreadyOn) {
+      await sendMessage(env, chatId, "🤖 Auto-signal udah aktif. Ketik /stop_auto buat berhenti.");
+      return;
+    }
+    await startAutoSignal(env, chatId, { symbol: "BTCUSDT", tradeMode: "scalping", aiMode: "cepat" });
+    await sendMessage(
+      env,
+      chatId,
+      `🤖 <b>Auto-Signal AKTIF</b>
+
+Bot bakal otomatis analisis <b>BTCUSDT</b> (mode Scalping, 5 AI) tiap <b>10 menit</b>, dan otomatis ngecek TP/SL sinyal sebelumnya terhadap harga terkini.
+
+⚠️ Selama auto-signal aktif, sebaiknya jangan pakai "Signal Trade" manual di chat ini bareng, biar nggak saling tabrakan.
+
+Ketik /stop_auto buat berhenti kapan aja.`
+    );
+    return;
+  }
+
+  if (text === "/stop_auto") {
+    const wasOn = await getAutoMode(env, chatId);
+    await stopAutoSignal(env, chatId);
+    await sendMessage(
+      env,
+      chatId,
+      wasOn
+        ? "⏹️ Auto-signal dihentikan."
+        : "Auto-signal emang lagi nggak aktif kok, tapi udah dipastikan mati ya 👍"
+    );
     return;
   }
 
