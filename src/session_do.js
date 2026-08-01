@@ -10,13 +10,17 @@
  * menjadwalkan langkah berikutnya sendiri, jadi tidak kena limit itu sama
  * sekali.
  */
-import { editMessageText } from "./telegram.js";
+import { sendMessage, editMessageText } from "./telegram.js";
 import { analyzeChartImages, summarizeSignals } from "./groqVision.js";
 import { analyzeWithGroqText } from "./groqText.js";
 import { getAnalystsForMode } from "./analysts.js";
 import { mainMenuKeyboard, signalResultKeyboard } from "./menus.js";
 import { escapeHtml, formatTelegramHtml } from "./htmlUtil.js";
-import { logSignal } from "./signalLog.js";
+import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
+import { buildMarketDataPackage } from "./marketData.js";
+import { fetchCurrentPrice } from "./binance.js";
+
+const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
 
@@ -149,6 +153,34 @@ export class SessionDO {
         return Response.json(access);
       }
 
+      case "startAuto": {
+        const { chatId, symbol, tradeMode, aiMode } = await request.json();
+        await this.storage.put("autoMode", true);
+        await this.storage.put("autoChatId", chatId);
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        // Kalau nggak ada job interaktif yang lagi jalan, langsung mulai sekarang.
+        const job = await this.storage.get("job");
+        if (!job) await this.storage.setAlarm(Date.now());
+        return Response.json({ ok: true });
+      }
+
+      case "stopAuto": {
+        await this.storage.put("autoMode", false);
+        const job = await this.storage.get("job");
+        if (!job) {
+          // Nggak lagi di tengah 1 siklus analisis -> langsung batalkan
+          // alarm yang terjadwal buat siklus berikutnya.
+          await this.storage.delete("autoNextRun");
+          await this.storage.deleteAlarm();
+        }
+        return Response.json({ ok: true });
+      }
+
+      case "getAutoMode": {
+        const autoMode = (await this.storage.get("autoMode")) || false;
+        return Response.json({ autoMode });
+      }
+
       case "startAnalysis": {
         const { chatId, messageId, dataPackage } = await request.json();
         const photos = (await this.storage.get("photos")) || [];
@@ -187,7 +219,17 @@ export class SessionDO {
    */
   async alarm() {
     const job = await this.storage.get("job");
-    if (!job) return; // sudah selesai / dibatalkan lewat /batal
+
+    if (!job) {
+      // Nggak ada job interaktif yang jalan -> mungkin ini alarm buat MULAI
+      // siklus auto-signal berikutnya (lihat startAuto/stopAuto & /auto /stop_auto).
+      const autoNextRun = await this.storage.get("autoNextRun");
+      if (autoNextRun) {
+        await this.storage.delete("autoNextRun");
+        await this.runAutoCycle(autoNextRun);
+      }
+      return;
+    }
 
     const { chatId, messageId, aiMode, tradeMode, symbol, photos, dataPackage, step, opinions } = job;
     const analystsList = getAnalystsForMode(aiMode);
@@ -254,12 +296,21 @@ export class SessionDO {
       const decision = decisionMatch ? decisionMatch[1].toUpperCase() : null;
       let resultKeyboard = mainMenuKeyboard();
       if (decision && decision !== "WAIT") {
+        // Best-effort: coba ambil angka Stop-Loss & Take-Profit dari teks AI
+        // (buat auto-signal, dipakai cek TP/SL otomatis di siklus berikutnya).
+        // Kalau gagal ke-parse (format teksnya nggak biasa), tetap dicatat,
+        // cuma nggak bisa dicek otomatis — masih bisa ditandai manual.
+        const slPrice = extractPriceAfterLabel(finalSignalFixed, "Stop-Loss");
+        const tpPrice = extractPriceAfterLabel(finalSignalFixed, "Take-Profit");
+
         const signalId = await logSignal(this.env, {
           chatId,
           symbol,
           tradeMode,
           aiMode,
           decision,
+          slPrice,
+          tpPrice,
           createdAt: Date.now(),
         });
         resultKeyboard = signalResultKeyboard(signalId);
@@ -278,6 +329,13 @@ export class SessionDO {
       await this.storage.delete("tradeMode");
       await this.storage.delete("symbol");
       await this.storage.delete("aiMode");
+
+      // Kalau ini bagian dari auto-signal (/auto), jadwalkan siklus berikutnya.
+      const autoMode = await this.storage.get("autoMode");
+      if (autoMode) {
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
+      }
     } catch (err) {
       console.error("Analysis alarm error:", err);
       await safeEdit(
@@ -289,6 +347,110 @@ export class SessionDO {
       );
       await this.storage.delete("job");
       await this.storage.put("mode", "idle");
+
+      const autoMode = await this.storage.get("autoMode");
+      if (autoMode) {
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
+      }
+    }
+  }
+
+  /**
+   * 1 "detak" siklus auto-signal: cek dulu sinyal BTCUSDT yang masih "open"
+   * (udah kena TP/SL belum, dibandingin ke harga sekarang), baru mulai
+   * analisis baru. Dipanggil dari alarm() waktu autoNextRun ada isinya.
+   */
+  async runAutoCycle({ symbol, tradeMode, aiMode }) {
+    const stillAuto = await this.storage.get("autoMode");
+    if (!stillAuto) return; // sempat di-/stop_auto sebelum sempat jalan
+
+    const chatId = await this.storage.get("autoChatId");
+    if (!chatId) return;
+
+    await this.checkOpenSignalsAgainstPrice(symbol, chatId);
+
+    try {
+      const sent = await sendMessage(this.env, chatId, `🤖 <b>Auto-Signal</b> — mengambil data pasar ${symbol}...`);
+      const messageId = sent?.result?.message_id;
+      const dataPackage = await buildMarketDataPackage(symbol, tradeMode);
+
+      await this.storage.put("job", {
+        chatId,
+        messageId,
+        aiMode,
+        tradeMode,
+        symbol,
+        photos: [],
+        dataPackage,
+        step: 0,
+        opinions: [],
+      });
+      await this.storage.put("mode", "processing");
+      await this.storage.setAlarm(Date.now());
+    } catch (err) {
+      console.error("Auto-signal cycle error:", err);
+      await sendMessage(
+        this.env,
+        chatId,
+        `⚠️ Auto-signal gagal ambil data pasar: ${escapeHtml(err.message)}. Coba lagi ${AUTO_INTERVAL_MS / 60000} menit berikutnya.`
+      );
+      // Tetap jadwalin siklus berikutnya biar auto-mode nggak macet gara-gara 1x gagal.
+      const stillAutoAfterFail = await this.storage.get("autoMode");
+      if (stillAutoAfterFail) {
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
+      }
+    }
+  }
+
+  /**
+   * Cek semua sinyal BTCUSDT berstatus "open" (yang punya angka SL/TP hasil
+   * parsing) terhadap harga sekarang. Kalau sudah kesentuh TP atau SL,
+   * otomatis ditandai & user dikasih tahu. Best-effort — kalau harga gagal
+   * diambil atau suatu sinyal nggak punya angka SL/TP (gagal di-parse dari
+   * teks AI), sinyal itu dilewati aja (tetap "open", tinggal ditandai manual).
+   */
+  async checkOpenSignalsAgainstPrice(symbol, chatId) {
+    let entries;
+    try {
+      entries = await listSignals(this.env, chatId, "open");
+    } catch (err) {
+      console.error("Gagal ambil daftar sinyal open:", err);
+      return;
+    }
+
+    const relevant = entries.filter((e) => e.symbol === symbol && e.slPrice != null && e.tpPrice != null);
+    if (relevant.length === 0) return;
+
+    let currentPrice;
+    try {
+      currentPrice = await fetchCurrentPrice(symbol);
+    } catch (err) {
+      console.error("Gagal ambil harga terkini buat cek TP/SL:", err);
+      return;
+    }
+
+    for (const entry of relevant) {
+      const isLong = entry.decision === "BUY";
+      const hitTp = isLong ? currentPrice >= entry.tpPrice : currentPrice <= entry.tpPrice;
+      const hitSl = isLong ? currentPrice <= entry.slPrice : currentPrice >= entry.slPrice;
+
+      if (!hitTp && !hitSl) continue;
+
+      const status = hitTp ? "win" : "loss";
+      try {
+        await markSignalResult(this.env, entry.id, status);
+        await sendMessage(
+          this.env,
+          chatId,
+          hitTp
+            ? `🤖✅ <b>Auto-tandai: TP Kena (Menang)</b>\nSinyal ${entry.symbol} ${entry.decision} (${new Date(entry.createdAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB) — harga sekarang ${currentPrice}.`
+            : `🤖❌ <b>Auto-tandai: SL Kena (Kalah)</b>\nSinyal ${entry.symbol} ${entry.decision} (${new Date(entry.createdAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB) — harga sekarang ${currentPrice}.`
+        );
+      } catch (err) {
+        console.error("Gagal auto-tandai sinyal:", err);
+      }
     }
   }
 }
@@ -302,6 +464,29 @@ export class SessionDO {
  * Kalau suatu opini entah kenapa tidak ikut format itu, dianggap Netral
  * (fallback aman) — supaya totalnya tetap selalu sama dengan jumlah opini.
  */
+/**
+ * Best-effort: ambil angka pertama yang muncul setelah suatu label (misal
+ * "Stop-Loss:" atau "Take-Profit:") dari teks bebas AI. Karena formatnya
+ * teks natural (bisa "63868", "63 868", "63,868.5", dll), ini cuma
+ * heuristik — kalau gagal ke-parse, return null (sinyal tetap dicatat,
+ * cuma nggak ikut auto-check TP/SL, masih bisa ditandai manual).
+ */
+function extractPriceAfterLabel(text, label) {
+  const re = new RegExp(`${label}[^\\d]{0,15}([\\d][\\d.,\\s]*\\d|\\d)`, "i");
+  const match = re.exec(text);
+  if (!match) return null;
+
+  let raw = match[1].replace(/\s/g, "");
+  if (raw.includes(",") && raw.includes(".")) {
+    raw = raw.replace(/,/g, ""); // koma = ribuan, titik = desimal
+  } else if (raw.includes(",")) {
+    raw = raw.replace(/,/g, ""); // asumsi koma = ribuan (harga crypto USD)
+  }
+
+  const num = parseFloat(raw);
+  return Number.isFinite(num) ? num : null;
+}
+
 const BIAS_LINE_RE = /Bias:\s*(Bullish|Bearish|Netral)\b/i;
 
 function tallyBias(opinions) {
