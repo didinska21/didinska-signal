@@ -40,11 +40,11 @@ export async function getSignal(env, id) {
   return data.record;
 }
 
-/** Ambil riwayat sinyal (opsional difilter per chat), terbaru duluan. */
-export async function listSignals(env, chatId, limit) {
+/** Ambil riwayat sinyal (opsional difilter per chat & status), terbaru duluan. */
+export async function listSignals(env, chatId, status, limit) {
   const res = await getLogStub(env).fetch("https://log/listSignals", {
     method: "POST",
-    body: JSON.stringify({ chatId, limit }),
+    body: JSON.stringify({ chatId, status, limit }),
   });
   const data = await res.json();
   return data.entries;
