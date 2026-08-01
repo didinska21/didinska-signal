@@ -44,12 +44,13 @@ export class SignalLogDO {
       }
 
       case "listSignals": {
-        const { chatId, limit } = await request.json();
+        const { chatId, status, limit } = await request.json();
         // Key-nya "signal:<timestamp>_<chatId>" -> urutan key = urutan waktu,
         // jadi reverse:true otomatis dapet yang paling baru duluan.
         const map = await this.storage.list({ prefix: "signal:", reverse: true, limit: limit || 500 });
         let entries = Array.from(map.values());
         if (chatId) entries = entries.filter((e) => String(e.chatId) === String(chatId));
+        if (status) entries = entries.filter((e) => e.status === status);
         return Response.json({ entries });
       }
 
