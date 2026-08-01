@@ -114,3 +114,22 @@ export async function startAnalysis(env, chatId, messageId, dataPackage) {
     body: JSON.stringify({ chatId, messageId, dataPackage }),
   });
 }
+
+/** Nyalain auto-signal (dipicu /auto): analisis otomatis berulang tiap 10 menit */
+export async function startAutoSignal(env, chatId, { symbol, tradeMode, aiMode }) {
+  await getStub(env, chatId).fetch("https://session/startAuto", {
+    method: "POST",
+    body: JSON.stringify({ chatId, symbol, tradeMode, aiMode }),
+  });
+}
+
+/** Matiin auto-signal (dipicu /stop_auto) */
+export async function stopAutoSignal(env, chatId) {
+  await getStub(env, chatId).fetch("https://session/stopAuto", { method: "POST" });
+}
+
+export async function getAutoMode(env, chatId) {
+  const res = await getStub(env, chatId).fetch("https://session/getAutoMode");
+  const data = await res.json();
+  return data.autoMode;
+}
