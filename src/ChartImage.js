@@ -35,8 +35,23 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
     },
   ];
 
+  // Pengaman: kalau entry/sl/tp hasil parsing ternyata jauh di luar rentang
+  // harga candle yang ditampilkan (indikasi salah tangkap angka, misal "poin
+  // jarak" ke-scrape sebagai harga absolut), jangan digambar. Kalau tetap
+  // dipaksa gambar, sumbu-Y chart bakal auto-scale buat nampung nilai itu,
+  // dan harga aslinya jadi keliatan garis datar nyaris nggak kebaca.
+  const minClose = Math.min(...closes);
+  const maxClose = Math.max(...closes);
+  const priceRange = maxClose - minClose || maxClose * 0.01;
+  const isWithinReasonableRange = (value) =>
+    value >= minClose - priceRange * 3 && value <= maxClose + priceRange * 3;
+
   const addLevel = (value, label, color) => {
     if (value == null) return;
+    if (!isWithinReasonableRange(value)) {
+      console.warn(`ChartImage: level ${label}=${value} di luar range harga (${minClose}-${maxClose}), garis di-skip.`);
+      return;
+    }
     datasets.push({
       label: `${label} ${value}`,
       data: closes.map(() => value),
