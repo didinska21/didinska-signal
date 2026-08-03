@@ -316,11 +316,18 @@ export class SessionDO {
           );
         } catch (err) {
           console.error("Gagal generate/kirim chart:", err);
-          await sendMessage(
-            this.env,
-            chatId,
-            `⚠️ Gagal membuat gambar chart bergaris untuk <b>${symbol}</b>:\n${escapeHtml(err.message)}\n\n(Sinyal teks di atas tetap valid, ini cuma gambar tambahannya yang gagal.)`
-          );
+          try {
+            await sendMessage(
+              this.env,
+              chatId,
+              `⚠️ Gagal membuat gambar chart bergaris untuk ${escapeHtml(symbol)}: ${escapeHtml(err.message)}\n\n(Sinyal teks di atas tetap valid, ini cuma gambar tambahannya yang gagal.)`
+            );
+          } catch (notifyErr) {
+            // Kalau notifikasi error-nya sendiri ikut gagal (misal masalah
+            // jaringan sesaat), minimal jangan sampai bikin exception ini
+            // ikut "menelan" pesan aslinya tanpa jejak sama sekali di log.
+            console.error("Gagal juga kirim notifikasi error chart:", notifyErr);
+          }
         }
       }
 
