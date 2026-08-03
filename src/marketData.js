@@ -13,7 +13,7 @@ import { pivotPoints } from "./indicators.js";
 // per mode trading. Lihat menus.js untuk tfHint yang ditampilkan ke user.
 const TIMEFRAME_CONFIG = {
   scalping: { primary: "5m", htf: "1h" },
-  daytrade: { primary: "1h", htf: "4h" },
+  daytrade: { primary: "15m", htf: "4h" },
   swing: { primary: "4h", htf: "1d" },
 };
 
