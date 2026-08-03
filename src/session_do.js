@@ -10,7 +10,7 @@
  * menjadwalkan langkah berikutnya sendiri, jadi tidak kena limit itu sama
  * sekali.
  */
-import { sendMessage, editMessageText } from "./telegram.js";
+import { sendMessage, sendPhoto, editMessageText } from "./telegram.js";
 import { analyzeChartImages, summarizeSignals } from "./groqVision.js";
 import { analyzeWithGroqText } from "./groqText.js";
 import { getAnalystsForMode } from "./analysts.js";
@@ -19,6 +19,7 @@ import { escapeHtml, formatTelegramHtml } from "./htmlUtil.js";
 import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
 import { buildMarketDataPackage } from "./marketData.js";
 import { fetchCurrentPrice } from "./binance.js";
+import { buildSignalChartImage } from "./chartImage.js";
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
@@ -76,10 +77,6 @@ export class SessionDO {
 
       case "addPhoto": {
         const { fileId } = await request.json();
-        // Pakai transaction supaya read-modify-write ini atomik. Tanpa ini,
-        // 2 request "addPhoto" yang masuk hampir bersamaan (misal user kirim
-        // beberapa foto berurutan cepat) bisa saling selip di antara get()
-        // dan put(), sehingga salah satu foto hilang (lost update).
         const total = await this.storage.transaction(async (txn) => {
           const photos = (await txn.get("photos")) || [];
           photos.push(fileId);
@@ -89,7 +86,6 @@ export class SessionDO {
         return Response.json({ total });
       }
 
-      // --- Pola "claim" untuk photoPromptMsgId (lihat komentar di claimPhotoPromptMsgId) ---
       case "claimPhotoPromptMsgId": {
         const result = await this.storage.transaction(async (txn) => {
           const current = await txn.get("photoPromptMsgId");
@@ -99,9 +95,6 @@ export class SessionDO {
           if (current === "PENDING") {
             return { status: "pending" };
           }
-          // Belum ada sama sekali -> request ini yang "menang", klaim slotnya
-          // dulu (supaya request lain yang hampir bersamaan tahu harus nunggu,
-          // bukan sama-sama bikin pesan baru sendiri-sendiri).
           await txn.put("photoPromptMsgId", "PENDING");
           return { status: "claim" };
         });
@@ -158,7 +151,6 @@ export class SessionDO {
         await this.storage.put("autoMode", true);
         await this.storage.put("autoChatId", chatId);
         await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
-        // Kalau nggak ada job interaktif yang lagi jalan, langsung mulai sekarang.
         const job = await this.storage.get("job");
         if (!job) await this.storage.setAlarm(Date.now());
         return Response.json({ ok: true });
@@ -168,8 +160,6 @@ export class SessionDO {
         await this.storage.put("autoMode", false);
         const job = await this.storage.get("job");
         if (!job) {
-          // Nggak lagi di tengah 1 siklus analisis -> langsung batalkan
-          // alarm yang terjadwal buat siklus berikutnya.
           await this.storage.delete("autoNextRun");
           await this.storage.deleteAlarm();
         }
@@ -202,7 +192,6 @@ export class SessionDO {
         await this.storage.put("mode", "processing");
         await this.storage.delete("photoPromptMsgId");
 
-        // Trigger langkah pertama secepatnya
         await this.storage.setAlarm(Date.now());
         return Response.json({ ok: true });
       }
@@ -212,17 +201,10 @@ export class SessionDO {
     }
   }
 
-  /**
-   * Dipanggil otomatis oleh Cloudflare tiap kali alarm terpicu.
-   * Ini "mesin" yang menjalankan 1 langkah proses, lalu menjadwalkan
-   * langkah berikutnya (kalau masih ada).
-   */
   async alarm() {
     const job = await this.storage.get("job");
 
     if (!job) {
-      // Nggak ada job interaktif yang jalan -> mungkin ini alarm buat MULAI
-      // siklus auto-signal berikutnya (lihat startAuto/stopAuto & /auto /stop_auto).
       const autoNextRun = await this.storage.get("autoNextRun");
       if (autoNextRun) {
         await this.storage.delete("autoNextRun");
@@ -238,7 +220,6 @@ export class SessionDO {
       if (step < analystsList.length) {
         const analyst = analystsList[step];
 
-        // --- Langkah: 1 AI spesialis menganalisa ---
         await safeEdit(
           this.env,
           chatId,
@@ -278,7 +259,6 @@ export class SessionDO {
         return;
       }
 
-      // --- Semua AI spesialis selesai -> giliran AI Penyimpul ---
       await safeEdit(
         this.env,
         chatId,
@@ -290,20 +270,19 @@ export class SessionDO {
       const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally);
       const finalSignalFixed = enforceBiasTally(finalSignal, biasTally, opinions.length);
 
-      // --- Catat sinyal ini ke riwayat (fondasi win-rate BENERAN, bukan tebakan AI) ---
-      // WAIT tidak dicatat karena bukan keputusan entry yang bisa "menang/kalah".
       const decisionMatch = /Keputusan:\s*(BUY|SELL|WAIT)/i.exec(finalSignalFixed);
       const decision = decisionMatch ? decisionMatch[1].toUpperCase() : null;
       let resultKeyboard = mainMenuKeyboard();
+      let signalId = null;
+      let slPrice = null;
+      let tpPrice = null;
+      let entryPrice = null;
       if (decision && decision !== "WAIT") {
-        // Best-effort: coba ambil angka Stop-Loss & Take-Profit dari teks AI
-        // (buat auto-signal, dipakai cek TP/SL otomatis di siklus berikutnya).
-        // Kalau gagal ke-parse (format teksnya nggak biasa), tetap dicatat,
-        // cuma nggak bisa dicek otomatis — masih bisa ditandai manual.
-        const slPrice = extractPriceAfterLabel(finalSignalFixed, "Stop-Loss");
-        const tpPrice = extractPriceAfterLabel(finalSignalFixed, "Take-Profit");
+        slPrice = extractPriceAfterLabel(finalSignalFixed, "Stop-Loss");
+        tpPrice = extractPriceAfterLabel(finalSignalFixed, "Take-Profit");
+        entryPrice = extractPriceAfterLabel(finalSignalFixed, "Skenario Entry");
 
-        const signalId = await logSignal(this.env, {
+        signalId = await logSignal(this.env, {
           chatId,
           symbol,
           tradeMode,
@@ -316,13 +295,30 @@ export class SessionDO {
         resultKeyboard = signalResultKeyboard(signalId);
       }
 
-      // Escape dulu (parse_mode: HTML) supaya karakter "<" / "&" (misal "RSI < 30")
-      // tidak bikin Telegram reject pesan, LALU ubah gaya Markdown yang sering
-      // dipakai model ("**tebal**") jadi tag HTML asli (<b>) biar benar-benar tebal
-      // di Telegram, bukan tampil sebagai tanda bintang mentah.
       await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignalFixed), resultKeyboard);
 
-      // Beres — bersihkan job & session
+      if (!job.isAuto && decision && decision !== "WAIT") {
+        try {
+          const primaryInterval = dataPackage?.primaryInterval || "15m";
+          const imageBytes = await buildSignalChartImage({
+            symbol,
+            interval: primaryInterval,
+            entry: entryPrice,
+            sl: slPrice,
+            tp: tpPrice,
+            decision,
+          });
+          await sendPhoto(
+            this.env,
+            chatId,
+            imageBytes,
+            `📊 ${symbol} (${primaryInterval}) — 🟡 Entry ${entryPrice ?? "-"} | 🟢 TP ${tpPrice ?? "-"} | 🔴 SL ${slPrice ?? "-"}`
+          );
+        } catch (err) {
+          console.error("Gagal generate/kirim chart:", err);
+        }
+      }
+
       await this.storage.delete("job");
       await this.storage.put("mode", "idle");
       await this.storage.delete("photos");
@@ -330,7 +326,6 @@ export class SessionDO {
       await this.storage.delete("symbol");
       await this.storage.delete("aiMode");
 
-      // Kalau ini bagian dari auto-signal (/auto), jadwalkan siklus berikutnya.
       const autoMode = await this.storage.get("autoMode");
       if (autoMode) {
         await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
@@ -356,14 +351,9 @@ export class SessionDO {
     }
   }
 
-  /**
-   * 1 "detak" siklus auto-signal: cek dulu sinyal BTCUSDT yang masih "open"
-   * (udah kena TP/SL belum, dibandingin ke harga sekarang), baru mulai
-   * analisis baru. Dipanggil dari alarm() waktu autoNextRun ada isinya.
-   */
   async runAutoCycle({ symbol, tradeMode, aiMode }) {
     const stillAuto = await this.storage.get("autoMode");
-    if (!stillAuto) return; // sempat di-/stop_auto sebelum sempat jalan
+    if (!stillAuto) return;
 
     const chatId = await this.storage.get("autoChatId");
     if (!chatId) return;
@@ -385,6 +375,7 @@ export class SessionDO {
         dataPackage,
         step: 0,
         opinions: [],
+        isAuto: true,
       });
       await this.storage.put("mode", "processing");
       await this.storage.setAlarm(Date.now());
@@ -395,7 +386,6 @@ export class SessionDO {
         chatId,
         `⚠️ Auto-signal gagal ambil data pasar: ${escapeHtml(err.message)}. Coba lagi ${AUTO_INTERVAL_MS / 60000} menit berikutnya.`
       );
-      // Tetap jadwalin siklus berikutnya biar auto-mode nggak macet gara-gara 1x gagal.
       const stillAutoAfterFail = await this.storage.get("autoMode");
       if (stillAutoAfterFail) {
         await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
@@ -404,13 +394,6 @@ export class SessionDO {
     }
   }
 
-  /**
-   * Cek semua sinyal BTCUSDT berstatus "open" (yang punya angka SL/TP hasil
-   * parsing) terhadap harga sekarang. Kalau sudah kesentuh TP atau SL,
-   * otomatis ditandai & user dikasih tahu. Best-effort — kalau harga gagal
-   * diambil atau suatu sinyal nggak punya angka SL/TP (gagal di-parse dari
-   * teks AI), sinyal itu dilewati aja (tetap "open", tinggal ditandai manual).
-   */
   async checkOpenSignalsAgainstPrice(symbol, chatId) {
     let entries;
     try {
@@ -455,22 +438,6 @@ export class SessionDO {
   }
 }
 
-/**
- * Hitung tally Bullish/Bearish/Netral dari kode, BUKAN dipercayakan ke AI
- * Penyimpul menghitung sendiri (LLM sering salah jumlah kalau diminta hitung
- * manual di tengah teks panjang). Tiap AI spesialis diwajibkan (lewat system
- * prompt) mengakhiri jawabannya dengan baris persis "Bias: Bullish/Bearish/Netral",
- * jadi di sini kita tinggal cari baris itu dengan regex.
- * Kalau suatu opini entah kenapa tidak ikut format itu, dianggap Netral
- * (fallback aman) — supaya totalnya tetap selalu sama dengan jumlah opini.
- */
-/**
- * Best-effort: ambil angka pertama yang muncul setelah suatu label (misal
- * "Stop-Loss:" atau "Take-Profit:") dari teks bebas AI. Karena formatnya
- * teks natural (bisa "63868", "63 868", "63,868.5", dll), ini cuma
- * heuristik — kalau gagal ke-parse, return null (sinyal tetap dicatat,
- * cuma nggak ikut auto-check TP/SL, masih bisa ditandai manual).
- */
 function extractPriceAfterLabel(text, label) {
   const re = new RegExp(`${label}[^\\d]{0,15}([\\d][\\d.,\\s]*\\d|\\d)`, "i");
   const match = re.exec(text);
@@ -478,9 +445,9 @@ function extractPriceAfterLabel(text, label) {
 
   let raw = match[1].replace(/\s/g, "");
   if (raw.includes(",") && raw.includes(".")) {
-    raw = raw.replace(/,/g, ""); // koma = ribuan, titik = desimal
+    raw = raw.replace(/,/g, "");
   } else if (raw.includes(",")) {
-    raw = raw.replace(/,/g, ""); // asumsi koma = ribuan (harga crypto USD)
+    raw = raw.replace(/,/g, "");
   }
 
   const num = parseFloat(raw);
@@ -501,12 +468,6 @@ function tallyBias(opinions) {
   return tally;
 }
 
-/**
- * Sisipkan/timpa rincian tally di baris "📈 Probabilitas: ..." dengan angka
- * yang SUDAH PASTI benar (hasil hitungan kode), apa pun yang ditulis AI
- * Penyimpul di baris itu. Ini jaring pengaman terakhir supaya user tidak
- * pernah lagi melihat total yang tidak masuk akal (misal 7+6+2 = 15).
- */
 function enforceBiasTally(text, tally, total) {
   const tallyStr = `(${tally.bullish} Bullish, ${tally.bearish} Bearish, ${tally.netral} Netral dari total ${total} AI spesialis)`;
   const probLineRe = /(📈\s*Probabilitas:[^\n]*)/i;
@@ -521,7 +482,6 @@ function enforceBiasTally(text, tally, total) {
   return `${text}\n\n📈 Probabilitas: ${tallyStr}`;
 }
 
-/** Edit pesan, tapi abaikan error "message is not modified" (bukan error fatal) */
 async function safeEdit(env, chatId, messageId, text, replyMarkup) {
   try {
     await editMessageText(env, chatId, messageId, text, replyMarkup);
@@ -531,4 +491,3 @@ async function safeEdit(env, chatId, messageId, text, replyMarkup) {
     }
   }
 }
-
