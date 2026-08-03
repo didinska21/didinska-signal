@@ -287,9 +287,13 @@ export class SessionDO {
         // kalau cuma cari string "Stop-Loss" persis, pencarian gagal TOTAL
         // begitu karakter dash-nya beda, dan SL/TP jadi null (pernah kejadian,
         // lihat test/session_do.test.js untuk kasus nyatanya).
-        slPrice = extractPriceAfterLabel(plainSignal, "Stop[\\s\\-–—]*Loss");
-        tpPrice = extractPriceAfterLabel(plainSignal, "Take[\\s\\-–—]*Profit");
-        entryPrice = extractPriceAfterLabel(plainSignal, "Skenario[\\s\\-–—]*Entry");
+        // dataPackage.lastPrice = harga pasar terakhir, dipakai sebagai acuan
+        // supaya extractPriceAfterLabel bisa milih angka yang masuk akal
+        // sebagai harga (lihat komentar di definisi fungsinya).
+        const lastPrice = dataPackage?.lastPrice ?? null;
+        slPrice = extractPriceAfterLabel(plainSignal, "Stop[\\s\\-–—]*Loss", lastPrice);
+        tpPrice = extractPriceAfterLabel(plainSignal, "Take[\\s\\-–—]*Profit", lastPrice);
+        entryPrice = extractPriceAfterLabel(plainSignal, "Skenario[\\s\\-–—]*Entry", lastPrice);
 
         signalId = await logSignal(this.env, {
           chatId,
@@ -487,32 +491,83 @@ export function detectDecision(text) {
   return match ? match[1].toUpperCase() : null;
 }
 
-export function extractPriceAfterLabel(text, label) {
-  const idx = text.search(new RegExp(label, "i"));
-  if (idx === -1) return null;
+// Marker section lain yang jadi BATAS AKHIR window pencarian suatu label,
+// supaya window milik 1 label (mis. "Stop-Loss") tidak nyerempet ke isi
+// label lain (mis. "Take-Profit" atau "Probabilitas") yang kebetulan disebut
+// tepat setelahnya dalam 160 karakter berikutnya.
+const SECTION_BOUNDARY_RE = /(Manajemen\s*Risiko|Stop[\s\-–—]*Loss|Take[\s\-–—]*Profit|📈|Probabilitas)/i;
 
-  // Ambil potongan teks setelah label, cukup untuk nampung 1-2 kalimat.
-  const window = text.slice(idx, idx + 160);
+/**
+ * Ambil angka harga yang mengikuti sebuah label (mis. "Stop-Loss", "Skenario
+ * Entry") dari teks AI Penyimpul.
+ *
+ * @param {string} text - teks AI Penyimpul (sudah dibuang markdown "*"-nya).
+ * @param {string} label - pola regex label, mis. "Stop[\\s\\-–—]*Loss".
+ * @param {number|null} referencePrice - harga pasar terakhir (mis.
+ *   dataPackage.lastPrice), dipakai sebagai "jangkar" untuk milih angka mana
+ *   di dalam window yang paling masuk akal sebagai harga. Opsional — kalau
+ *   tidak diisi/null, fungsi jalan pakai heuristik lama saja (lihat di bawah).
+ *
+ * KENAPA PAKAI referencePrice:
+ * Sebelumnya fungsi ini nebak lewat posisi kurung/simbol "≈", tapi itu rapuh
+ * karena gaya nulis AI berubah-ubah. Contoh bug nyata dari laporan user:
+ * AI nulis "Stop-Loss: 62400 (≈1,5×ATR di bawah entry...)" — di sini "≈"
+ * dipakai untuk rasio MULTIPLIER (1,5), bukan harga, tapi heuristik lama
+ * nangkep "1,5" itu jadi "15" dan dikira harga SL (harusnya 62400, harga yang
+ * sudah jelas-jelas ditulis PERSIS setelah label). Chart jadi salah total
+ * (Entry 15 | TP 1 | SL 15 — semua angka rasio, bukan harga).
+ *
+ * Dengan referencePrice, sistem sekarang milih kandidat angka yang jaraknya
+ * paling dekat ke harga pasar (dalam rentang wajar 0.5x–1.5x) — SL/TP/Entry
+ * itu pasti dekat harga pasar, sedangkan angka rasio/multiplier (1.5, 2, 1:2)
+ * jauh lebih kecil dan otomatis kefilter, apapun gaya nulis AI-nya.
+ */
+export function extractPriceAfterLabel(text, label, referencePrice = null) {
+  const searchRe = new RegExp(label, "i");
+  const labelExec = searchRe.exec(text);
+  if (!labelExec) return null;
 
-  // Prioritas 1: angka di dalam KURUNG yang eksplisit didahului "≈", misal
-  // "(≈ 63 200)" — ini konvensi yang dipakai AI Penyimpul untuk menyatakan
-  // HARGA ASLI. Wajib syarat "≈" ada DI DALAM kurung (bukan kurung apa saja),
-  // supaya tidak salah tangkap kurung lain yang kebetulan ada di window
-  // (misal referensi Fair Value Gap "(63148-63188)" yang bukan level SL/TP).
-  //
-  // Ini juga memperbaiki bug nyata: kalau AI nulis DUA simbol "≈" dalam 1
-  // baris, misal "1,5 × ATR ≈ 193 poin di atas entry (≈ 63 200)", regex versi
-  // lama nangkep "≈ 193" (jarak poin) karena itu "≈" PERTAMA yang ketemu di
-  // window — padahal harga aslinya "63 200" ada belakangan, di dalam kurung.
+  const idx = labelExec.index;
+  const afterLabelIdx = idx + labelExec[0].length;
+
+  // Batasi window supaya berhenti sebelum section BERIKUTNYA (kalau ada),
+  // bukan asal potong 160 karakter yang bisa nyerempet ke label lain.
+  const rest = text.slice(afterLabelIdx, afterLabelIdx + 200);
+  const boundary = SECTION_BOUNDARY_RE.exec(rest);
+  const windowEnd = afterLabelIdx + (boundary ? boundary.index : Math.min(rest.length, 160));
+  const window = text.slice(idx, windowEnd);
+
+  // Prioritas 1 (paling robust, dipakai kalau referencePrice tersedia):
+  // kumpulkan SEMUA angka di window, lalu pilih yang paling dekat ke harga
+  // pasar terakhir, asal masih dalam rentang wajar (0.5x-1.5x).
+  if (referencePrice != null && referencePrice > 0) {
+    const numberRe = /[\d][\d.,\s]*\d|\d/g;
+    const candidates = [];
+    let m;
+    while ((m = numberRe.exec(window)) !== null) {
+      const val = parsePriceString(m[0]);
+      if (val != null) candidates.push(val);
+    }
+    const inRange = candidates.filter((c) => c >= referencePrice * 0.5 && c <= referencePrice * 1.5);
+    if (inRange.length > 0) {
+      inRange.sort((a, b) => Math.abs(a - referencePrice) - Math.abs(b - referencePrice));
+      return inRange[0];
+    }
+  }
+
+  // Prioritas 2 (fallback, dipakai kalau referencePrice tidak ada/tidak
+  // ketemu kandidat masuk akal): angka di dalam kurung yang eksplisit
+  // didahului "≈", misal "(≈ 63 200)" — konvensi lama AI Penyimpul untuk
+  // menyatakan harga asli.
   const parenMatch = /\(\s*≈\s*([\d][\d.,\s]*\d|\d)/.exec(window);
   if (parenMatch) return parsePriceString(parenMatch[1]);
 
-  // Prioritas 2: angka setelah "≈" tanpa kurung (mis. "≈ 63130" polos).
+  // Prioritas 3: angka setelah "≈" tanpa kurung (mis. "≈ 63130" polos).
   const approxMatch = /≈\s*([\d][\d.,\s]*\d|\d)/.exec(window);
   if (approxMatch) return parsePriceString(approxMatch[1]);
 
-  // Prioritas 3 (fallback lama): angka pertama yang cukup dekat setelah label,
-  // dipakai kalau AI sama sekali tidak menulis simbol "≈" (mis. "Entry: 63050").
+  // Prioritas 4 (fallback terakhir): angka pertama yang cukup dekat setelah
+  // label, dipakai kalau AI sama sekali tidak menulis simbol "≈".
   const fallbackMatch = new RegExp(`${label}[^\\d]{0,60}([\\d][\\d.,\\s]*\\d|\\d)`, "i").exec(window);
   return fallbackMatch ? parsePriceString(fallbackMatch[1]) : null;
 }
