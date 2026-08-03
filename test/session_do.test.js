@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractPriceAfterLabel } from "../src/session_do.js";
+import { extractPriceAfterLabel, detectDecision, tallyBias } from "../src/session_do.js";
 
 // Teks ini persis dari kasus nyata yang dilaporkan (screenshot BTC/USDT SELL) —
 // sebelum perbaikan, SL & TP ke-extract sebagai angka "poin" (79.5 / 159),
@@ -49,4 +49,46 @@ test("extractPriceAfterLabel: harga dengan pemisah ribuan (koma) tetap ke-parse 
   const text = "Stop-Loss: 50 poin di bawah entry (≈ 1,234.5)";
   const value = extractPriceAfterLabel(text, "Stop-Loss");
   assert.equal(value, 1234.5);
+});
+
+// --- Regresi: label dibungkus markdown bold ("**Keputusan:** SELL") ---
+// Ini akar masalah nyata yang bikin gambar chart bergaris TIDAK PERNAH
+// dikirim: kalau regex deteksi decision gagal match karena ada "**" di
+// antara label dan nilainya, decision jadi null, dan proses kirim gambar
+// chart di alarm() cuma jalan kalau decision valid & bukan WAIT.
+
+test("detectDecision: format polos 'Keputusan: SELL' terdeteksi", () => {
+  assert.equal(detectDecision("🎯 Keputusan: SELL\nBias Arah: Bearish"), "SELL");
+});
+
+test("detectDecision: format markdown '**Keputusan:** SELL' TETAP terdeteksi (bug utama)", () => {
+  assert.equal(detectDecision("🎯 **Keputusan:** SELL\n**Bias Arah:** Bearish"), "SELL");
+});
+
+test("detectDecision: variasi '**Keputusan**: BUY' (colon di luar bold) tetap terdeteksi", () => {
+  assert.equal(detectDecision("**Keputusan**: BUY"), "BUY");
+});
+
+test("detectDecision: WAIT dan BUY juga terdeteksi dengan benar", () => {
+  assert.equal(detectDecision("**Keputusan:** WAIT"), "WAIT");
+  assert.equal(detectDecision("**Keputusan:** BUY"), "BUY");
+});
+
+test("detectDecision: tidak ada label 'Keputusan' sama sekali -> null", () => {
+  assert.equal(detectDecision("Tidak ada info keputusan di sini."), null);
+});
+
+test("tallyBias: bias per-AI dengan markdown bold '**Bias:** Bearish' tetap terhitung benar (bukan jatuh ke netral)", () => {
+  const opinions = [
+    { opinion: "**Bias:** Bearish, momentum turun." },
+    { opinion: "Bias: Bullish, momentum naik." },
+    { opinion: "**Bias:** Netral, menunggu konfirmasi." },
+  ];
+  const tally = tallyBias(opinions);
+  assert.deepEqual(tally, { bullish: 1, bearish: 1, netral: 1 });
+});
+
+test("tallyBias: opinion tanpa baris Bias sama sekali -> dihitung netral (fallback aman)", () => {
+  const tally = tallyBias([{ opinion: "Tidak ada baris bias di sini." }]);
+  assert.deepEqual(tally, { bullish: 0, bearish: 0, netral: 1 });
 });
