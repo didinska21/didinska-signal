@@ -106,7 +106,9 @@ Format WAJIB jawaban (gunakan struktur ini persis):
 📊 Bias Arah: (Bullish / Bearish / Netral)
 📍 Level Kunci: (Support & Resistance utama)
 🎯 Skenario Entry: (area Long/Short)
-🛡️ Manajemen Risiko: (Stop-Loss & Take-Profit yang logis, sebutkan rasio Risk:Reward)
+🛡️ Manajemen Risiko:
+- Stop-Loss: (WAJIB tulis HARGA ABSOLUT dulu, persis setelah tanda titik dua, baru boleh tambah penjelasan setelahnya — misal "Stop-Loss: 63200 (≈1,5×ATR di atas entry)". JANGAN tulis jarak/poin duluan sebelum harga absolutnya.)
+- Take-Profit: (format sama: HARGA ABSOLUT dulu, penjelasan setelahnya — misal "Take-Profit: 62600 (rasio Risk:Reward ≈1:2)")
 📈 Probabilitas: (HANYA tulis perkiraan persentase keyakinan, misal "±65%" — JANGAN tulis rincian jumlah AI di baris ini, itu akan ditambahkan otomatis oleh sistem)
 
 Akhiri dengan satu kalimat: sebutkan ini hasil gabungan ${opinions.length} AI spesialis, berdasarkan probabilitas matematis, dan risiko sepenuhnya ditanggung trader.`;
