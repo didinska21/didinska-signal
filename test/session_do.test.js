@@ -51,6 +51,28 @@ test("extractPriceAfterLabel: harga dengan pemisah ribuan (koma) tetap ke-parse 
   assert.equal(value, 1234.5);
 });
 
+// --- Regresi: AI kadang nulis label pakai EN DASH "–" (bukan hyphen "-" biasa),
+// misal "Stop–Loss" bukan "Stop-Loss". Kasus nyata: kode yang cari literal
+// "Stop-Loss" gagal TOTAL menemukan "Stop–Loss", jadi SL/TP tampil "-" di
+// caption gambar chart walau harga sudah benar ada di teks sinyalnya.
+test("extractPriceAfterLabel: pola dash fleksibel tetap ketemu walau label pakai EN DASH", () => {
+  const text = "- Stop–Loss: 63,084 (≈ +187 pips di atas entry)";
+  const value = extractPriceAfterLabel(text, "Stop[\\s\\-–—]*Loss");
+  assert.equal(value, 63084);
+});
+
+test("extractPriceAfterLabel: pola dash fleksibel tetap ketemu walau label pakai EM DASH", () => {
+  const text = "Take—Profit: 62,300 – 61,900 (2 – 3 × jarak SL)";
+  const value = extractPriceAfterLabel(text, "Take[\\s\\-–—]*Profit");
+  assert.equal(value, 62300);
+});
+
+test("extractPriceAfterLabel: label dengan hyphen biasa TETAP jalan pakai pola dash fleksibel (tidak regresi)", () => {
+  const text = "Take-Profit: 62,300 – 61,900";
+  const value = extractPriceAfterLabel(text, "Take[\\s\\-–—]*Profit");
+  assert.equal(value, 62300);
+});
+
 // --- Regresi: label dibungkus markdown bold ("**Keputusan:** SELL") ---
 // Ini akar masalah nyata yang bikin gambar chart bergaris TIDAK PERNAH
 // dikirim: kalau regex deteksi decision gagal match karena ada "**" di
