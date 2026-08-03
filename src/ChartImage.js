@@ -69,12 +69,13 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
   const isWithinReasonableRange = (value) =>
     value >= minClose - priceRange * 3 && value <= maxClose + priceRange * 3;
 
-  const addLevel = (value, label, color) => {
-    if (value == null) return;
+  const addLevel = (value, label, color, fillOptions) => {
+    if (value == null) return null;
     if (!isWithinReasonableRange(value)) {
       console.warn(`ChartImage: level ${label}=${value} di luar range harga (${minClose}-${maxClose}), garis di-skip.`);
-      return;
+      return null;
     }
+    const datasetIndex = datasets.length;
     datasets.push({
       type: "line",
       label: `${label} ${value}`,
@@ -83,18 +84,36 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
         { x: lastX, y: value },
       ],
       borderColor: color,
-      borderDash: [6, 4],
+      borderDash: fillOptions ? [] : [6, 4],
       borderWidth: 1.5,
       pointRadius: 0,
-      fill: false,
-      // biar garis nembus dari ujung ke ujung tanpa ikut animasi kurva candle
+      // Kalau fillOptions dikasih, area antara garis ini dan garis Entry
+      // (yang sudah lebih dulu ke-push, jadi index-nya lebih kecil) diisi
+      // warna transparan — efeknya jadi "kotak zona" kayak tool Long/Short
+      // Position di Binance. Ini pakai fitur fill bawaan Chart.js v3
+      // (bukan plugin annotation terpisah), karena QuickChart nggak
+      // dukung plugin annotation di Chart.js v3+ yang dipakai buat
+      // candlestick.
+      fill: fillOptions ? fillOptions.target : false,
+      backgroundColor: fillOptions ? fillOptions.bg : undefined,
       tension: 0,
     });
+    return datasetIndex;
   };
 
-  addLevel(entry, "Entry", "#eab308");
-  addLevel(tp, "TP", "#16a34a");
-  addLevel(sl, "SL", "#dc2626");
+  const entryIdx = addLevel(entry, "Entry", "#eab308");
+  addLevel(
+    tp,
+    "TP",
+    "#16a34a",
+    entryIdx != null ? { target: entryIdx, bg: "rgba(22, 163, 74, 0.15)" } : null,
+  );
+  addLevel(
+    sl,
+    "SL",
+    "#dc2626",
+    entryIdx != null ? { target: entryIdx, bg: "rgba(220, 38, 38, 0.15)" } : null,
+  );
 
   // Support/Resistance: ambil swing point TERDEKAT dari harga sekarang
   // (bukan yang paling ekstrem), karena itu yang paling relevan buat
