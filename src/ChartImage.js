@@ -9,29 +9,23 @@
  * candlestick asli (open/high/low/close per candle) — butuh Chart.js v3+,
  * makanya request ke QuickChart eksplisit set "version": "3" dan opsi
  * `scales` pakai sintaks v3 (bukan xAxes/yAxes ala v2).
- *
- * Support & Resistance dihitung LANGSUNG dari candle yang sama yang
- * ditampilkan di chart (bukan dari teks "Level Kunci" hasil AI Penyimpul),
- * pakai fungsi swing high/low yang sama dengan yang dipakai heuristik SMC
- * (lihat smc.js). Tujuannya biar garisnya selalu konsisten dengan apa yang
- * kelihatan di gambar, dan tetap muncul walau decision-nya WAIT.
  */
 import { fetchKlines } from "./binance.js";
-import { findSwingPoints } from "./smc.js";
 
 const CANDLE_COUNT = 120;
-// Kotak zona Entry/TP/SL nggak lagi nempel di candle — ada jarak kosong
-// dulu (BOX_GAP_CANDLES), baru kotaknya muncul selebar BOX_WIDTH_CANDLES,
-// persis kayak drawing tool "Long/Short Position" di Binance yang digambar
-// ke area kosong di sebelah kanan candle terakhir.
-const BOX_GAP_CANDLES = 4;
-const BOX_WIDTH_CANDLES = 16;
+// Kotak zona Entry/TP/SL digambar di ruang kosong sebelah kanan candle
+// terakhir (nggak nempel), persis kayak drawing tool "Long/Short Position"
+// di Binance. Ukurannya dihitung sebagai FRAKSI dari total rentang waktu
+// candle yang ditampilkan (bukan jumlah candle tetap), biar kotaknya tetap
+// proporsional terlihat jelas walau CANDLE_COUNT di atas diubah-ubah.
+const BOX_GAP_FRACTION = 0.03; // jarak kosong sebelum kotak
+const BOX_WIDTH_FRACTION = 0.3; // lebar kotak
 
 /**
  * Return ArrayBuffer (bytes PNG) siap dikirim lewat sendPhoto().
  * entry/sl/tp boleh null (kalau gagal ke-parse, atau decision-nya WAIT) —
- * garisnya cuma dilewatin, chart tetap jalan dengan support/resistance +
- * marker harga sekarang.
+ * kotak zonanya cuma dilewatin, chart tetap jalan dengan garis harga
+ * sekarang.
  */
 export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, decision }) {
   const candles = await fetchKlines(symbol, interval, CANDLE_COUNT);
@@ -41,12 +35,12 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
   const lastX = candles[candles.length - 1].closeTime;
   const currentPrice = closes[closes.length - 1];
 
-  // Jarak antar candle (dalam ms), dipakai buat nentuin posisi kotak
-  // Entry/TP/SL di area kosong sebelah kanan candle terakhir.
-  const intervalMs =
-    candles.length > 1 ? candles[1].closeTime - candles[0].closeTime : 15 * 60 * 1000;
-  const boxStartX = lastX + intervalMs * BOX_GAP_CANDLES;
-  const boxEndX = boxStartX + intervalMs * BOX_WIDTH_CANDLES;
+  // Rentang waktu total yang ditampilkan, dipakai buat nentuin ukuran
+  // kotak Entry/TP/SL secara proporsional (lihat BOX_GAP_FRACTION /
+  // BOX_WIDTH_FRACTION di atas).
+  const totalSpanMs = lastX - firstX;
+  const boxStartX = lastX + totalSpanMs * BOX_GAP_FRACTION;
+  const boxEndX = boxStartX + totalSpanMs * BOX_WIDTH_FRACTION;
 
   const datasets = [
     {
@@ -135,41 +129,25 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
     boxRange,
   );
 
-  // Support/Resistance: ambil swing point TERDEKAT dari harga sekarang
-  // (bukan yang paling ekstrem), karena itu yang paling relevan buat
-  // keputusan trading saat ini. Fallback ke swing paling ekstrem kalau
-  // nggak ada swing di sisi yang sesuai (misal harga breakout all-time-high
-  // di rentang 60 candle ini, jadi nggak ada swing high di atasnya).
-  const { swingHighs, swingLows } = findSwingPoints(candles, candles.length, 2);
-
-  const resistanceCandidates = swingHighs
-    .filter((s) => s.price > currentPrice)
-    .sort((a, b) => a.price - b.price);
-  const resistance =
-    resistanceCandidates[0]?.price ??
-    (swingHighs.length ? Math.max(...swingHighs.map((s) => s.price)) : null);
-
-  const supportCandidates = swingLows
-    .filter((s) => s.price < currentPrice)
-    .sort((a, b) => b.price - a.price);
-  const support =
-    supportCandidates[0]?.price ??
-    (swingLows.length ? Math.min(...swingLows.map((s) => s.price)) : null);
-
-  addLevel(resistance, "Resistance", "#9333ea");
-  addLevel(support, "Support", "#0891b2");
-
-  // Marker harga sekarang: cuma titik di ujung kanan (candle terakhir),
-  // bukan garis penuh, biar nggak numpuk sama garis-garis lain.
+  // Harga sekarang: garis putus-putus dari ujung kiri chart sampai ujung
+  // kotak (biar kelihatan konteksnya dibanding history), dengan marker
+  // bulat di ujung kanan supaya gampang dibaca posisinya.
   datasets.push({
     type: "line",
     label: `Harga Sekarang ${currentPrice}`,
-    data: [{ x: lastX, y: currentPrice }],
-    showLine: false,
-    pointRadius: 6,
-    pointBackgroundColor: "#ffffff",
-    pointBorderColor: "#111827",
-    pointBorderWidth: 2,
+    data: [
+      { x: firstX, y: currentPrice },
+      { x: boxEndX, y: currentPrice },
+    ],
+    borderColor: "#374151",
+    borderDash: [6, 4],
+    borderWidth: 1.5,
+    pointRadius: [0, 6],
+    pointBackgroundColor: ["transparent", "#ffffff"],
+    pointBorderColor: ["transparent", "#111827"],
+    pointBorderWidth: [0, 2],
+    fill: false,
+    tension: 0,
   });
 
   const chartConfig = {
