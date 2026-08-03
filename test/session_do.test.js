@@ -51,6 +51,19 @@ test("extractPriceAfterLabel: harga dengan pemisah ribuan (koma) tetap ke-parse 
   assert.equal(value, 1234.5);
 });
 
+// --- Regresi: AI kadang nulis DUA simbol "≈" dalam satu baris — satu untuk
+// JARAK/multiplier (mis. "1,5 × ATR ≈ 193 poin") dan satu lagi untuk HARGA
+// ASLI di dalam kurung (mis. "(≈ 63 200)"). Kasus nyata dari laporan user:
+// gambar chart bergaris cuma nampilin garis Entry, garis SL/TP hilang total
+// karena ke-extract sebagai angka jarak yang jauh di luar skala harga chart.
+test("extractPriceAfterLabel: dua simbol ≈ dalam 1 baris -> ambil harga di kurung, bukan jarak poin", () => {
+  const text =
+    "- Stop-Loss: 1,5 × ATR ≈ 193 poin di atas entry (≈ 63 200)\n" +
+    "- Take-Profit: 2 × SL ≈ 386 poin di bawah entry (≈ 62 600) – rasio Risk:Reward ≈ 1:2";
+  assert.equal(extractPriceAfterLabel(text, "Stop[\\s\\-–—]*Loss"), 63200);
+  assert.equal(extractPriceAfterLabel(text, "Take[\\s\\-–—]*Profit"), 62600);
+});
+
 // --- Regresi: AI kadang nulis label pakai EN DASH "–" (bukan hyphen "-" biasa),
 // misal "Stop–Loss" bukan "Stop-Loss". Kasus nyata: kode yang cari literal
 // "Stop-Loss" gagal TOTAL menemukan "Stop–Loss", jadi SL/TP tampil "-" di
