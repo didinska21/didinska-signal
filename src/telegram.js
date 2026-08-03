@@ -31,6 +31,44 @@ export async function sendMessage(env, chatId, text, replyMarkup = null) {
   return call(env, "sendMessage", payload);
 }
 
+/**
+ * Kirim foto. `photo` bisa berupa:
+ * - string URL (Telegram yang fetch sendiri, paling simpel)
+ * - bytes (ArrayBuffer/Uint8Array/Blob), di-upload manual lewat multipart —
+ *   dipakai buat gambar chart yang kita generate sendiri (bukan dari URL publik).
+ */
+export async function sendPhoto(env, chatId, photo, caption = null) {
+  if (typeof photo === "string") {
+    const payload = { chat_id: chatId, photo };
+    if (caption) {
+      payload.caption = caption;
+      payload.parse_mode = "HTML";
+    }
+    return call(env, "sendPhoto", payload);
+  }
+
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (caption) {
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+  }
+  const blob = photo instanceof Blob ? photo : new Blob([photo], { type: "image/png" });
+  form.append("photo", blob, "chart.png");
+
+  const res = await fetch(`${API_BASE(env.TELEGRAM_BOT_TOKEN)}/sendPhoto`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Telegram API error (sendPhoto): ${res.status} - ${errText}`);
+  }
+
+  return res.json();
+}
+
 /** Edit pesan yang sudah ada (dipakai saat user klik tombol menu) */
 export async function editMessageText(env, chatId, messageId, text, replyMarkup = null) {
   const payload = {
