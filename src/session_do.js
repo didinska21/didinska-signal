@@ -269,18 +269,22 @@ export class SessionDO {
       const biasTally = tallyBias(opinions);
       const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally);
       const finalSignalFixed = enforceBiasTally(finalSignal, biasTally, opinions.length);
+      const decision = detectDecision(finalSignalFixed);
 
-      const decisionMatch = /Keputusan:\s*(BUY|SELL|WAIT)/i.exec(finalSignalFixed);
-      const decision = decisionMatch ? decisionMatch[1].toUpperCase() : null;
+      // AI sering menulis label dibungkus markdown, misal "**Keputusan:** SELL"
+      // bukan "Keputusan: SELL" polos — detectDecision() & extractPriceAfterLabel()
+      // sudah menangani ini (lihat komentar masing-masing fungsi).
+      const plainSignal = finalSignalFixed.replace(/\*/g, "");
+
       let resultKeyboard = mainMenuKeyboard();
       let signalId = null;
       let slPrice = null;
       let tpPrice = null;
       let entryPrice = null;
       if (decision && decision !== "WAIT") {
-        slPrice = extractPriceAfterLabel(finalSignalFixed, "Stop-Loss");
-        tpPrice = extractPriceAfterLabel(finalSignalFixed, "Take-Profit");
-        entryPrice = extractPriceAfterLabel(finalSignalFixed, "Skenario Entry");
+        slPrice = extractPriceAfterLabel(plainSignal, "Stop-Loss");
+        tpPrice = extractPriceAfterLabel(plainSignal, "Take-Profit");
+        entryPrice = extractPriceAfterLabel(plainSignal, "Skenario Entry");
 
         signalId = await logSignal(this.env, {
           chatId,
@@ -462,6 +466,22 @@ export class SessionDO {
  * pola itu tidak ditemukan (misal baris Skenario Entry yang biasanya
  * langsung sebut harga tanpa tanda "≈").
  */
+/**
+ * Deteksi keputusan final (BUY/SELL/WAIT) dari teks AI Penyimpul.
+ *
+ * AI kadang menulis "**Keputusan:** SELL" (markdown bold), bukan
+ * "Keputusan: SELL" polos. Kalau di-regex langsung, tanda "**" yang nempel
+ * pas di antara label dan nilainya bikin match GAGAL TOTAL (bukan cuma
+ * kurang rapi) — akibatnya sinyal tidak ke-log DAN gambar chart bergaris
+ * juga ikut tidak pernah dibuat, karena keduanya butuh decision yang valid.
+ * Makanya "*" dibuang dulu sebelum di-match.
+ */
+export function detectDecision(text) {
+  const plain = String(text).replace(/\*/g, "");
+  const match = /Keputusan:\s*(BUY|SELL|WAIT)/i.exec(plain);
+  return match ? match[1].toUpperCase() : null;
+}
+
 export function extractPriceAfterLabel(text, label) {
   const idx = text.search(new RegExp(label, "i"));
   if (idx === -1) return null;
@@ -484,10 +504,11 @@ function parsePriceString(raw) {
 
 const BIAS_LINE_RE = /Bias:\s*(Bullish|Bearish|Netral)\b/i;
 
-function tallyBias(opinions) {
+export function tallyBias(opinions) {
   const tally = { bullish: 0, bearish: 0, netral: 0 };
   for (const op of opinions) {
-    const match = BIAS_LINE_RE.exec(op.opinion || "");
+    const plainOpinion = (op.opinion || "").replace(/\*/g, "");
+    const match = BIAS_LINE_RE.exec(plainOpinion);
     const bias = match ? match[1].toLowerCase() : "netral";
     if (bias === "bullish") tally.bullish++;
     else if (bias === "bearish") tally.bearish++;
