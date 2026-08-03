@@ -9,14 +9,23 @@
  * candlestick asli (open/high/low/close per candle) — butuh Chart.js v3+,
  * makanya request ke QuickChart eksplisit set "version": "3" dan opsi
  * `scales` pakai sintaks v3 (bukan xAxes/yAxes ala v2).
+ *
+ * Support & Resistance dihitung LANGSUNG dari 60 candle yang sama yang
+ * ditampilkan di chart (bukan dari teks "Level Kunci" hasil AI Penyimpul),
+ * pakai fungsi swing high/low yang sama dengan yang dipakai heuristik SMC
+ * (lihat smc.js). Tujuannya biar garisnya selalu konsisten dengan apa yang
+ * kelihatan di gambar, dan tetap muncul walau decision-nya WAIT.
  */
 import { fetchKlines } from "./binance.js";
+import { findSwingPoints } from "./smc.js";
 
 const CANDLE_COUNT = 60;
 
 /**
  * Return ArrayBuffer (bytes PNG) siap dikirim lewat sendPhoto().
- * entry/sl/tp boleh null (kalau gagal ke-parse) — garisnya cuma dilewatin.
+ * entry/sl/tp boleh null (kalau gagal ke-parse, atau decision-nya WAIT) —
+ * garisnya cuma dilewatin, chart tetap jalan dengan support/resistance +
+ * marker harga sekarang.
  */
 export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, decision }) {
   const candles = await fetchKlines(symbol, interval, CANDLE_COUNT);
@@ -24,6 +33,7 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
   const closes = candles.map((c) => c.close);
   const firstX = candles[0].closeTime;
   const lastX = candles[candles.length - 1].closeTime;
+  const currentPrice = closes[closes.length - 1];
 
   const datasets = [
     {
@@ -85,6 +95,43 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
   addLevel(entry, "Entry", "#eab308");
   addLevel(tp, "TP", "#16a34a");
   addLevel(sl, "SL", "#dc2626");
+
+  // Support/Resistance: ambil swing point TERDEKAT dari harga sekarang
+  // (bukan yang paling ekstrem), karena itu yang paling relevan buat
+  // keputusan trading saat ini. Fallback ke swing paling ekstrem kalau
+  // nggak ada swing di sisi yang sesuai (misal harga breakout all-time-high
+  // di rentang 60 candle ini, jadi nggak ada swing high di atasnya).
+  const { swingHighs, swingLows } = findSwingPoints(candles, candles.length, 2);
+
+  const resistanceCandidates = swingHighs
+    .filter((s) => s.price > currentPrice)
+    .sort((a, b) => a.price - b.price);
+  const resistance =
+    resistanceCandidates[0]?.price ??
+    (swingHighs.length ? Math.max(...swingHighs.map((s) => s.price)) : null);
+
+  const supportCandidates = swingLows
+    .filter((s) => s.price < currentPrice)
+    .sort((a, b) => b.price - a.price);
+  const support =
+    supportCandidates[0]?.price ??
+    (swingLows.length ? Math.min(...swingLows.map((s) => s.price)) : null);
+
+  addLevel(resistance, "Resistance", "#9333ea");
+  addLevel(support, "Support", "#0891b2");
+
+  // Marker harga sekarang: cuma titik di ujung kanan (candle terakhir),
+  // bukan garis penuh, biar nggak numpuk sama garis-garis lain.
+  datasets.push({
+    type: "line",
+    label: `Harga Sekarang ${currentPrice}`,
+    data: [{ x: lastX, y: currentPrice }],
+    showLine: false,
+    pointRadius: 6,
+    pointBackgroundColor: "#ffffff",
+    pointBorderColor: "#111827",
+    pointBorderWidth: 2,
+  });
 
   const chartConfig = {
     type: "candlestick",
