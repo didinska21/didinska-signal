@@ -10,7 +10,7 @@
  * makanya request ke QuickChart eksplisit set "version": "3" dan opsi
  * `scales` pakai sintaks v3 (bukan xAxes/yAxes ala v2).
  *
- * Support & Resistance dihitung LANGSUNG dari 60 candle yang sama yang
+ * Support & Resistance dihitung LANGSUNG dari candle yang sama yang
  * ditampilkan di chart (bukan dari teks "Level Kunci" hasil AI Penyimpul),
  * pakai fungsi swing high/low yang sama dengan yang dipakai heuristik SMC
  * (lihat smc.js). Tujuannya biar garisnya selalu konsisten dengan apa yang
@@ -19,7 +19,13 @@
 import { fetchKlines } from "./binance.js";
 import { findSwingPoints } from "./smc.js";
 
-const CANDLE_COUNT = 60;
+const CANDLE_COUNT = 120;
+// Kotak zona Entry/TP/SL nggak lagi nempel di candle — ada jarak kosong
+// dulu (BOX_GAP_CANDLES), baru kotaknya muncul selebar BOX_WIDTH_CANDLES,
+// persis kayak drawing tool "Long/Short Position" di Binance yang digambar
+// ke area kosong di sebelah kanan candle terakhir.
+const BOX_GAP_CANDLES = 4;
+const BOX_WIDTH_CANDLES = 16;
 
 /**
  * Return ArrayBuffer (bytes PNG) siap dikirim lewat sendPhoto().
@@ -34,6 +40,13 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
   const firstX = candles[0].closeTime;
   const lastX = candles[candles.length - 1].closeTime;
   const currentPrice = closes[closes.length - 1];
+
+  // Jarak antar candle (dalam ms), dipakai buat nentuin posisi kotak
+  // Entry/TP/SL di area kosong sebelah kanan candle terakhir.
+  const intervalMs =
+    candles.length > 1 ? candles[1].closeTime - candles[0].closeTime : 15 * 60 * 1000;
+  const boxStartX = lastX + intervalMs * BOX_GAP_CANDLES;
+  const boxEndX = boxStartX + intervalMs * BOX_WIDTH_CANDLES;
 
   const datasets = [
     {
@@ -69,19 +82,20 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
   const isWithinReasonableRange = (value) =>
     value >= minClose - priceRange * 3 && value <= maxClose + priceRange * 3;
 
-  const addLevel = (value, label, color, fillOptions) => {
+  const addLevel = (value, label, color, fillOptions, xRange) => {
     if (value == null) return null;
     if (!isWithinReasonableRange(value)) {
       console.warn(`ChartImage: level ${label}=${value} di luar range harga (${minClose}-${maxClose}), garis di-skip.`);
       return null;
     }
+    const [xStart, xEnd] = xRange || [firstX, lastX];
     const datasetIndex = datasets.length;
     datasets.push({
       type: "line",
       label: `${label} ${value}`,
       data: [
-        { x: firstX, y: value },
-        { x: lastX, y: value },
+        { x: xStart, y: value },
+        { x: xEnd, y: value },
       ],
       borderColor: color,
       borderDash: fillOptions ? [] : [6, 4],
@@ -101,18 +115,24 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
     return datasetIndex;
   };
 
-  const entryIdx = addLevel(entry, "Entry", "#eab308");
+  // Entry/TP/SL digambar di kotak yang terpisah dari candle (ada jarak
+  // kosong dulu), bukan garis penuh dari ujung ke ujung chart lagi.
+  const boxRange = [boxStartX, boxEndX];
+
+  const entryIdx = addLevel(entry, "Entry", "#eab308", null, boxRange);
   addLevel(
     tp,
     "TP",
     "#16a34a",
     entryIdx != null ? { target: entryIdx, bg: "rgba(22, 163, 74, 0.15)" } : null,
+    boxRange,
   );
   addLevel(
     sl,
     "SL",
     "#dc2626",
     entryIdx != null ? { target: entryIdx, bg: "rgba(220, 38, 38, 0.15)" } : null,
+    boxRange,
   );
 
   // Support/Resistance: ambil swing point TERDEKAT dari harga sekarang
