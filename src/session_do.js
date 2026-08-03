@@ -19,7 +19,7 @@ import { escapeHtml, formatTelegramHtml } from "./htmlUtil.js";
 import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
 import { buildMarketDataPackage } from "./marketData.js";
 import { fetchCurrentPrice } from "./binance.js";
-import { buildSignalChartImage } from "./chartImage.js";
+import { buildSignalChartImage } from "./ChartImage.js";
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
@@ -316,6 +316,11 @@ export class SessionDO {
           );
         } catch (err) {
           console.error("Gagal generate/kirim chart:", err);
+          await sendMessage(
+            this.env,
+            chatId,
+            `⚠️ Gagal membuat gambar chart bergaris untuk <b>${symbol}</b>:\n${escapeHtml(err.message)}\n\n(Sinyal teks di atas tetap valid, ini cuma gambar tambahannya yang gagal.)`
+          );
         }
       }
 
@@ -438,19 +443,35 @@ export class SessionDO {
   }
 }
 
-function extractPriceAfterLabel(text, label) {
-  const re = new RegExp(`${label}[^\\d]{0,15}([\\d][\\d.,\\s]*\\d|\\d)`, "i");
-  const match = re.exec(text);
-  if (!match) return null;
+/**
+ * Ambil estimasi harga (Entry/SL/TP) dari teks final AI Penyimpul.
+ *
+ * Kenapa tidak sekadar "angka pertama setelah label": AI sering menulis
+ * jarak dalam poin/persentase duluan (misal "Stop-Loss: 79.5 poin di atas
+ * entry (≈ 63130)"), sementara harga ASLI-nya baru muncul di dalam kurung
+ * setelah tanda "≈". Kalau langsung ambil angka pertama, yang ke-ambil
+ * malah "79.5" (jarak poin), bukan harga sebenarnya. Jadi pola "≈ <angka>"
+ * diprioritaskan dulu, baru fallback ke angka pertama setelah label kalau
+ * pola itu tidak ditemukan (misal baris Skenario Entry yang biasanya
+ * langsung sebut harga tanpa tanda "≈").
+ */
+export function extractPriceAfterLabel(text, label) {
+  const idx = text.search(new RegExp(label, "i"));
+  if (idx === -1) return null;
 
-  let raw = match[1].replace(/\s/g, "");
-  if (raw.includes(",") && raw.includes(".")) {
-    raw = raw.replace(/,/g, "");
-  } else if (raw.includes(",")) {
-    raw = raw.replace(/,/g, "");
-  }
+  // Ambil potongan teks setelah label, cukup untuk nampung 1-2 kalimat.
+  const window = text.slice(idx, idx + 160);
 
-  const num = parseFloat(raw);
+  const approxMatch = /≈\s*([\d][\d.,\s]*\d|\d)/.exec(window);
+  if (approxMatch) return parsePriceString(approxMatch[1]);
+
+  const fallbackMatch = new RegExp(`${label}[^\\d]{0,60}([\\d][\\d.,\\s]*\\d|\\d)`, "i").exec(window);
+  return fallbackMatch ? parsePriceString(fallbackMatch[1]) : null;
+}
+
+function parsePriceString(raw) {
+  const cleaned = raw.replace(/\s/g, "").replace(/,/g, "");
+  const num = parseFloat(cleaned);
   return Number.isFinite(num) ? num : null;
 }
 
