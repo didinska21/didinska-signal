@@ -494,9 +494,25 @@ export function extractPriceAfterLabel(text, label) {
   // Ambil potongan teks setelah label, cukup untuk nampung 1-2 kalimat.
   const window = text.slice(idx, idx + 160);
 
+  // Prioritas 1: angka di dalam KURUNG yang eksplisit didahului "≈", misal
+  // "(≈ 63 200)" — ini konvensi yang dipakai AI Penyimpul untuk menyatakan
+  // HARGA ASLI. Wajib syarat "≈" ada DI DALAM kurung (bukan kurung apa saja),
+  // supaya tidak salah tangkap kurung lain yang kebetulan ada di window
+  // (misal referensi Fair Value Gap "(63148-63188)" yang bukan level SL/TP).
+  //
+  // Ini juga memperbaiki bug nyata: kalau AI nulis DUA simbol "≈" dalam 1
+  // baris, misal "1,5 × ATR ≈ 193 poin di atas entry (≈ 63 200)", regex versi
+  // lama nangkep "≈ 193" (jarak poin) karena itu "≈" PERTAMA yang ketemu di
+  // window — padahal harga aslinya "63 200" ada belakangan, di dalam kurung.
+  const parenMatch = /\(\s*≈\s*([\d][\d.,\s]*\d|\d)/.exec(window);
+  if (parenMatch) return parsePriceString(parenMatch[1]);
+
+  // Prioritas 2: angka setelah "≈" tanpa kurung (mis. "≈ 63130" polos).
   const approxMatch = /≈\s*([\d][\d.,\s]*\d|\d)/.exec(window);
   if (approxMatch) return parsePriceString(approxMatch[1]);
 
+  // Prioritas 3 (fallback lama): angka pertama yang cukup dekat setelah label,
+  // dipakai kalau AI sama sekali tidak menulis simbol "≈" (mis. "Entry: 63050").
   const fallbackMatch = new RegExp(`${label}[^\\d]{0,60}([\\d][\\d.,\\s]*\\d|\\d)`, "i").exec(window);
   return fallbackMatch ? parsePriceString(fallbackMatch[1]) : null;
 }
