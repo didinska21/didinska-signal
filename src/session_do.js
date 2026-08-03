@@ -282,9 +282,14 @@ export class SessionDO {
       let tpPrice = null;
       let entryPrice = null;
       if (decision && decision !== "WAIT") {
-        slPrice = extractPriceAfterLabel(plainSignal, "Stop-Loss");
-        tpPrice = extractPriceAfterLabel(plainSignal, "Take-Profit");
-        entryPrice = extractPriceAfterLabel(plainSignal, "Skenario Entry");
+        // Pola dash "[\\s\\-–—]*" dipakai karena AI kadang nulis "Stop–Loss"
+        // atau "Take—Profit" pakai en dash/em dash (bukan hyphen "-" biasa) —
+        // kalau cuma cari string "Stop-Loss" persis, pencarian gagal TOTAL
+        // begitu karakter dash-nya beda, dan SL/TP jadi null (pernah kejadian,
+        // lihat test/session_do.test.js untuk kasus nyatanya).
+        slPrice = extractPriceAfterLabel(plainSignal, "Stop[\\s\\-–—]*Loss");
+        tpPrice = extractPriceAfterLabel(plainSignal, "Take[\\s\\-–—]*Profit");
+        entryPrice = extractPriceAfterLabel(plainSignal, "Skenario[\\s\\-–—]*Entry");
 
         signalId = await logSignal(this.env, {
           chatId,
