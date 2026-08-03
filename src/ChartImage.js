@@ -1,9 +1,14 @@
 /**
- * Generate gambar chart (harga terakhir + garis Entry/SL/TP) pakai QuickChart
+ * Generate gambar chart (candlestick + garis Entry/SL/TP) pakai QuickChart
  * (gratis, nggak perlu API key: https://quickchart.io). Candle di sini
  * di-fetch TERPISAH dari dataPackage yang dikirim ke AI — sengaja, biar
  * nggak nambah ukuran prompt yang dikirim ke tiap analyst. Chart cuma
  * dibikin SEKALI di akhir, khusus buat ditampilkan ke user.
+ *
+ * Pakai plugin chartjs-chart-financial (bawaan QuickChart) buat render
+ * candlestick asli (open/high/low/close per candle) — butuh Chart.js v3+,
+ * makanya request ke QuickChart eksplisit set "version": "3" dan opsi
+ * `scales` pakai sintaks v3 (bukan xAxes/yAxes ala v2).
  */
 import { fetchKlines } from "./binance.js";
 
@@ -16,22 +21,30 @@ const CANDLE_COUNT = 60;
 export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, decision }) {
   const candles = await fetchKlines(symbol, interval, CANDLE_COUNT);
 
-  const labels = candles.map((c) => {
-    const d = new Date(c.closeTime);
-    return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-  });
   const closes = candles.map((c) => c.close);
+  const firstX = candles[0].closeTime;
+  const lastX = candles[candles.length - 1].closeTime;
 
   const datasets = [
     {
       label: `${symbol} (${interval})`,
-      data: closes,
-      borderColor: "#2563eb",
-      backgroundColor: "rgba(37,99,235,0.08)",
-      borderWidth: 2,
-      pointRadius: 0,
-      fill: true,
-      tension: 0.1,
+      data: candles.map((c) => ({
+        x: c.closeTime,
+        o: c.open,
+        h: c.high,
+        l: c.low,
+        c: c.close,
+      })),
+      color: {
+        up: "#16a34a",
+        down: "#dc2626",
+        unchanged: "#6b7280",
+      },
+      borderColor: {
+        up: "#16a34a",
+        down: "#dc2626",
+        unchanged: "#6b7280",
+      },
     },
   ];
 
@@ -53,13 +66,19 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
       return;
     }
     datasets.push({
+      type: "line",
       label: `${label} ${value}`,
-      data: closes.map(() => value),
+      data: [
+        { x: firstX, y: value },
+        { x: lastX, y: value },
+      ],
       borderColor: color,
       borderDash: [6, 4],
       borderWidth: 1.5,
       pointRadius: 0,
       fill: false,
+      // biar garis nembus dari ujung ke ujung tanpa ikut animasi kurva candle
+      tension: 0,
     });
   };
 
@@ -68,14 +87,21 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
   addLevel(sl, "SL", "#dc2626");
 
   const chartConfig = {
-    type: "line",
-    data: { labels, datasets },
+    type: "candlestick",
+    data: { datasets },
     options: {
-      title: { display: true, text: `${symbol} — ${decision || ""}`.trim(), fontSize: 16 },
-      legend: { display: true, position: "bottom" },
+      plugins: {
+        title: { display: true, text: `${symbol} — ${decision || ""}`.trim(), font: { size: 16 } },
+        legend: { display: true, position: "bottom" },
+      },
       scales: {
-        xAxes: [{ ticks: { maxTicksLimit: 8, fontSize: 10 } }],
-        yAxes: [{ ticks: { fontSize: 10 } }],
+        x: {
+          type: "timeseries",
+          ticks: { maxTicksLimit: 8, font: { size: 10 } },
+        },
+        y: {
+          ticks: { font: { size: 10 } },
+        },
       },
     },
   };
@@ -89,6 +115,7 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
       height: 500,
       backgroundColor: "white",
       devicePixelRatio: 2,
+      version: "3",
     }),
   });
 
