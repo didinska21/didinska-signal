@@ -64,6 +64,46 @@ test("extractPriceAfterLabel: dua simbol ≈ dalam 1 baris -> ambil harga di kur
   assert.equal(extractPriceAfterLabel(text, "Take[\\s\\-–—]*Profit"), 62600);
 });
 
+// --- Regresi: kasus nyata dari laporan user (screenshot BTCUSDT BUY, chart
+// keluar "Entry 15 | TP 1 | SL 15"). Di sini AI menulis harga yang SUDAH BENAR
+// persis setelah label ("Stop-Loss: 62400"), tapi keterangan di kurung
+// setelahnya juga pakai simbol "≈" untuk RASIO/MULTIPLIER, bukan harga (mis.
+// "≈1,5×ATR", "≈1:2"). Heuristik lama (nyari "≈" lalu ambil angka
+// setelahnya) malah nangkep "1,5" -> jadi "15", dan "1:2" -> jadi "1".
+// Perbaikan: kasih referencePrice (harga pasar terakhir) supaya sistem milih
+// angka yang MASUK AKAL sebagai harga, bukan angka rasio yang jauh lebih kecil.
+const NEW_FORMAT_TEXT = `🎯 Skenario Entry: Long di area 62560-62500 (di atas support historis 62500)
+🛡️ Manajemen Risiko:
+- Stop-Loss: 62400 (≈1,5×ATR di bawah entry, melindungi dari penembusan support)
+- Take-Profit: 62890 (rasio Risk:Reward ≈1:2, target di bawah resistance pertama)`;
+
+test("extractPriceAfterLabel: kurung berisi ≈ RASIO (bukan harga) -> dengan referencePrice, tetap ambil harga yang benar", () => {
+  const referencePrice = 62800;
+  assert.equal(
+    extractPriceAfterLabel(NEW_FORMAT_TEXT, "Stop[\\s\\-–—]*Loss", referencePrice),
+    62400
+  );
+  assert.equal(
+    extractPriceAfterLabel(NEW_FORMAT_TEXT, "Take[\\s\\-–—]*Profit", referencePrice),
+    62890
+  );
+  assert.equal(
+    extractPriceAfterLabel(NEW_FORMAT_TEXT, "Skenario[\\s\\-–—]*Entry", referencePrice),
+    62560
+  );
+});
+
+test("extractPriceAfterLabel: window 1 label tidak nyerempet ke angka label lain di dekatnya", () => {
+  // Tanpa batas window yang benar, window "Stop-Loss" bisa nyerempet sampai
+  // ke angka "62890" milik Take-Profit, dan referencePrice yang kebetulan
+  // lebih dekat ke situ bikin salah pilih.
+  const referencePrice = 62850; // sengaja lebih dekat ke 62890 drpd 62400
+  assert.equal(
+    extractPriceAfterLabel(NEW_FORMAT_TEXT, "Stop[\\s\\-–—]*Loss", referencePrice),
+    62400
+  );
+});
+
 // --- Regresi: AI kadang nulis label pakai EN DASH "–" (bukan hyphen "-" biasa),
 // misal "Stop–Loss" bukan "Stop-Loss". Kasus nyata: kode yang cari literal
 // "Stop-Loss" gagal TOTAL menemukan "Stop–Loss", jadi SL/TP tampil "-" di
