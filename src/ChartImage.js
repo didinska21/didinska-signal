@@ -160,7 +160,14 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
       },
       scales: {
         x: {
-          type: "timeseries",
+          // "time" (bukan "timeseries") sengaja dipilih: timeseries di
+          // Chart.js otomatis meratakan jarak antar titik data (dibikin
+          // rapat merata biar enak dibaca), jadi gap kosong yang sengaja
+          // dibuat buat kotak Entry/TP/SL malah ikut kegencet dan
+          // kotaknya kelihatan kecil. "time" murni proporsional terhadap
+          // waktu asli (ms), jadi lebar kotak sesuai BOX_WIDTH_FRACTION
+          // beneran kelihatan.
+          type: "time",
           ticks: { maxTicksLimit: 8, font: { size: 10 } },
         },
         y: {
