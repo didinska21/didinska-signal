@@ -229,9 +229,9 @@ async function handleCallbackQuery(env, callbackQuery) {
     return;
   }
 
-  // --- Pilih mode analisis: Cepat vs Lengkap ---
-  if (data === "ai_mode_cepat" || data === "ai_mode_lengkap") {
-    const aiMode = data === "ai_mode_cepat" ? "cepat" : "lengkap";
+  // --- Pilih mode analisis: Cepat vs Lengkap vs Fibo & QM ---
+  if (data === "ai_mode_cepat" || data === "ai_mode_lengkap" || data === "ai_mode_fiboqm") {
+    const aiMode = data === "ai_mode_cepat" ? "cepat" : data === "ai_mode_lengkap" ? "lengkap" : "fiboqm";
     await setAiMode(env, chatId, aiMode);
 
     if (aiMode === "lengkap") {
@@ -241,7 +241,7 @@ async function handleCallbackQuery(env, callbackQuery) {
       return;
     }
 
-    // Mode Cepat: langsung mulai, tidak perlu foto
+    // Mode Cepat & Fibo/QM: langsung mulai, tidak perlu foto
     await editMessageText(env, chatId, messageId, "⏳ Mengambil data pasar & memulai analisis...");
     await beginAnalysis(env, chatId, messageId, null);
     return;
