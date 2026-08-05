@@ -267,7 +267,7 @@ export class SessionDO {
       );
 
       const biasTally = tallyBias(opinions);
-      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally);
+      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally, aiMode);
       const finalSignalFixed = enforceBiasTally(finalSignal, biasTally, opinions.length);
       const decision = detectDecision(finalSignalFixed);
 
@@ -313,6 +313,7 @@ export class SessionDO {
       if (!job.isAuto && decision && decision !== "WAIT") {
         try {
           const primaryInterval = dataPackage?.primaryInterval || "15m";
+          const isFiboQmMode = aiMode === "fiboqm";
           const imageBytes = await buildSignalChartImage({
             symbol,
             interval: primaryInterval,
@@ -320,6 +321,8 @@ export class SessionDO {
             sl: slPrice,
             tp: tpPrice,
             decision,
+            fiboLevels: isFiboQmMode ? dataPackage?.fiboQm?.fibonacci?.levels ?? null : null,
+            qmLevel: isFiboQmMode ? dataPackage?.fiboQm?.quasimodo?.qmLevel ?? null : null,
           });
           await sendPhoto(
             this.env,

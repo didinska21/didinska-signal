@@ -8,6 +8,7 @@ import { buildIndicatorSummary } from "./indicators.js";
 import { buildSmcSummary } from "./smc.js";
 import { buildMacroSummary } from "./macroData.js";
 import { pivotPoints } from "./indicators.js";
+import { buildFiboQmSummary } from "./fiboQm.js";
 
 // Interval "primer" (analisis utama) & "HTF" (higher timeframe, buat cek MTF alignment)
 // per mode trading. Lihat menus.js untuk tfHint yang ditampilkan ke user.
@@ -35,6 +36,11 @@ export async function buildMarketDataPackage(symbol, tradeMode) {
   const primaryIndicators = buildIndicatorSummary(primaryCandles);
   const htfIndicators = buildIndicatorSummary(htfCandles);
   const smc = buildSmcSummary(primaryCandles, 60);
+  // Fibonacci arah-otomatis + deteksi pola Quasimodo (QM), khusus dipakai
+  // mode analisis "Fibo & QM". Tetap dihitung untuk semua mode (murah,
+  // murni komputasi lokal dari candle yang sudah di-fetch) supaya
+  // marketData.js tetap 1 sumber data lengkap untuk semua mode.
+  const fiboQm = buildFiboQmSummary(primaryCandles, 60);
 
   // Candle terakhir di array adalah hari ini (mungkin belum tutup),
   // jadi pivot point pakai candle SEBELUMNYA (hari kemarin, sudah closed).
@@ -53,6 +59,7 @@ export async function buildMarketDataPackage(symbol, tradeMode) {
     htf: { interval: tf.htf, indicators: htfIndicators },
     pivot,
     smc,
+    fiboQm,
     macro,
   };
 }

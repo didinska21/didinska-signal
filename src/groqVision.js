@@ -83,8 +83,18 @@ WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" at
  * fallback pakai GROQ_API_KEY yang sama seperti AI analyst.
  *
  * @param {Array<{label: string, opinion: string}>} opinions - opini tiap AI spesialis, dengan label perannya
+ * @param {string} [aiMode] - "cepat" | "lengkap" | "fiboqm". Kalau "fiboqm",
+ *   prompt diberi instruksi bobot penimbangan KHUSUS (2 AI Fibo & QM jadi
+ *   pertimbangan utama, sisanya cuma konfirmasi) — lihat FIBO_QM_WEIGHT_NOTE.
  */
-export async function summarizeSignals(env, opinions, tradeMode, symbol, biasTally) {
+const FIBO_QM_WEIGHT_NOTE = `
+
+CATATAN KHUSUS MODE "FIBO & QM" — PENTING, BEDA DARI MODE BIASA:
+Dari ${"{OPINION_COUNT}"} opini di atas, opini AI 1 (Spesialis Fibonacci Retracement) dan AI 2 (Spesialis Pola Quasimodo/QM) adalah PERTIMBANGAN UTAMA — dasar keputusan bias arah & level kunci HARUS mengacu ke temuan mereka berdua (level Fibonacci & neckline QM yang mereka sebutkan, dengan angka).
+Opini AI 3-6 (Trend/Momentum/Volume/Risk Management) HANYA KONFIRMASI/PENDUKUNG — JANGAN samakan bobotnya dengan AI 1 & 2 walau tally bias di atas menghitung semuanya rata. Kalau AI 3-6 mayoritas BERTENTANGAN kuat dengan bias AI 1/2, sebutkan itu sebagai PERINGATAN RISIKO di jawaban Anda (bukan otomatis membalik keputusan).
+📍 Level Kunci WAJIB mencantumkan level Fibonacci relevan (dengan rasio & angka harga, misal "Fibo 0.618 di 64109") dan level QM/neckline (kalau ada polanya, dengan angka harga) — bukan cuma support/resistance historis biasa.`;
+
+export async function summarizeSignals(env, opinions, tradeMode, symbol, biasTally, aiMode) {
   const apiKey = env.GROQ_SUMMARIZER_API_KEY || env.GROQ_API_KEY;
   const model = env.GROQ_SUMMARY_MODEL || DEFAULT_SUMMARY_MODEL;
 
@@ -92,11 +102,13 @@ export async function summarizeSignals(env, opinions, tradeMode, symbol, biasTal
     ? `${biasTally.bullish} Bullish, ${biasTally.bearish} Bearish, ${biasTally.netral} Netral`
     : null;
 
+  const isFiboQm = aiMode === "fiboqm";
+
   const systemPrompt = `Anda adalah analis teknikal dan ahli perdagangan futures profesional yang bertugas SEBAGAI HAKIM/PENYIMPUL.
-Anda menerima TEPAT ${opinions.length} opini dari AI spesialis lain, masing-masing fokus di dimensi berbeda (trend, momentum, volatilitas, volume, support/resistance, smart money concept, price action, multi-timeframe, konteks makro, risk management). Bisa jadi ada yang berbeda pendapat.
-${tallyLine ? `\nTally bias SUDAH DIHITUNG OTOMATIS OLEH SISTEM dari ${opinions.length} opini di atas (bukan tugas Anda menghitung ulang): ${tallyLine}. Pakai ini sebagai salah satu pertimbangan keputusan Anda.\n` : ""}
+Anda menerima TEPAT ${opinions.length} opini dari AI spesialis lain${isFiboQm ? ", fokus mode analisis \"Fibo & QM\" (Fibonacci Retracement & pola Quasimodo sebagai pertimbangan utama, sisanya konfirmasi)" : ", masing-masing fokus di dimensi berbeda (trend, momentum, volatilitas, volume, support/resistance, smart money concept, price action, multi-timeframe, konteks makro, risk management)"}. Bisa jadi ada yang berbeda pendapat.
+${tallyLine ? `\nTally bias SUDAH DIHITUNG OTOMATIS OLEH SISTEM dari ${opinions.length} opini di atas (bukan tugas Anda menghitung ulang): ${tallyLine}. ${isFiboQm ? "Tally ini menghitung SEMUA opini secara RATA — perlakukan sebagai info tambahan saja, BUKAN acuan bobot (lihat catatan khusus di bawah)." : "Pakai ini sebagai salah satu pertimbangan keputusan Anda."}\n` : ""}
 Tugas Anda:
-1. Timbang tally bias di atas, dan apakah indikator Volume mendukung indikator Trend.
+1. ${isFiboQm ? "Timbang temuan Fibonacci & QM sebagai dasar utama, lalu nilai apakah AI penunjang (trend/momentum/volume) mendukung atau memperingatkan." : "Timbang tally bias di atas, dan apakah indikator Volume mendukung indikator Trend."}
 2. Simpulkan jadi SATU keputusan tegas. Simbol: ${symbol || "-"}. Mode trading: ${tradeMode}.
 
 Gunakan bahasa Indonesia yang profesional, ringkas, dan langsung pada intinya.
@@ -111,7 +123,7 @@ Format WAJIB jawaban (gunakan struktur ini persis):
 - Take-Profit: (format sama: HARGA ABSOLUT dulu, penjelasan setelahnya — misal "Take-Profit: 62600 (rasio Risk:Reward ≈1:2)")
 📈 Probabilitas: (HANYA tulis perkiraan persentase keyakinan, misal "±65%" — JANGAN tulis rincian jumlah AI di baris ini, itu akan ditambahkan otomatis oleh sistem)
 
-Akhiri dengan satu kalimat: sebutkan ini hasil gabungan ${opinions.length} AI spesialis, berdasarkan probabilitas matematis, dan risiko sepenuhnya ditanggung trader.`;
+Akhiri dengan satu kalimat: sebutkan ini hasil gabungan ${opinions.length} AI spesialis, berdasarkan probabilitas matematis, dan risiko sepenuhnya ditanggung trader.${isFiboQm ? FIBO_QM_WEIGHT_NOTE.replace("{OPINION_COUNT}", String(opinions.length)) : ""}`;
 
   const opinionsText = opinions.map((op) => `${op.label}:\n${op.opinion}`).join("\n\n");
 

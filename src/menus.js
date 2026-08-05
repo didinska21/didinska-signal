@@ -130,13 +130,14 @@ Ketik simbol pair futures yang mau dianalisa, contoh: <b>BTCUSDT</b>, <b>ETHUSDT
 Ketik /batal untuk membatalkan.`;
 }
 
-// --- Pilih mode analisis: Cepat (5 AI, murni data API) vs Lengkap (10 AI + foto) ---
+// --- Pilih mode analisis: Cepat (5 AI, data API) vs Lengkap (10 AI + foto) vs Fibo & QM (6 AI) ---
 export function aiModePromptText(symbol) {
   return `✅ Simbol <b>${symbol}</b> diterima.
 
 Pilih mode analisis:
 🚀 <b>Cepat</b> — 5 AI spesialis (Trend, Momentum, Volatilitas, Support/Resistance, Risk Management), semua berbasis data numerik, tanpa perlu kirim foto.
-🔬 <b>Lengkap</b> — 10 AI spesialis (termasuk Volume, Smart Money Concept, Price Action, Multi-Timeframe, & Konteks Makro). Perlu kirim 1 foto chart untuk AI Price Action.`;
+🔬 <b>Lengkap</b> — 10 AI spesialis (termasuk Volume, Smart Money Concept, Price Action, Multi-Timeframe, & Konteks Makro). Perlu kirim 1 foto chart untuk AI Price Action.
+🔢 <b>Fibo & QM</b> — 6 AI spesialis, fokus Fibonacci Retracement (arah otomatis) & pola Quasimodo sebagai pertimbangan utama, ditunjang Trend/Momentum/Volume/Risk Management. Tanpa foto.`;
 }
 
 export function aiModeKeyboard() {
@@ -146,6 +147,7 @@ export function aiModeKeyboard() {
         { text: "🚀 Cepat (5 AI)", callback_data: "ai_mode_cepat" },
         { text: "🔬 Lengkap (10 AI)", callback_data: "ai_mode_lengkap" },
       ],
+      [{ text: "🔢 Fibo & QM (6 AI)", callback_data: "ai_mode_fiboqm" }],
     ],
   };
 }

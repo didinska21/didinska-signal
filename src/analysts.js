@@ -161,6 +161,118 @@ export const ANALYSTS = [
   },
 ];
 
+/**
+ * Mode "Fibo & QM": rombak/repurpose 6 slot AI (bukan mode baru dari nol) —
+ * fokus khusus Fibonacci Retracement (arah otomatis) & pola Quasimodo (QM)
+ * sebagai PERTIMBANGAN UTAMA, sisanya (Trend/Momentum/Volume/Risk Mgmt)
+ * jadi KONFIRMASI/PENUNJANG saja — bukan voting bias yang sejajar seperti
+ * mode Cepat/Lengkap. Lihat instruksi khusus di tiap buildSystemPrompt &
+ * catatan di summarizeSignals() (groqVision.js) soal bobot penimbangan.
+ */
+function fiboQmHeader(title, symbol, tradeMode, role) {
+  const roleNote =
+    role === "primary"
+      ? `PERAN ANDA: PEMEGANG PERTIMBANGAN UTAMA di mode analisis "Fibo & QM" ini. Opini Anda adalah dasar utama keputusan akhir — bukan sekadar 1 dari banyak suara.`
+      : `PERAN ANDA: KONFIRMASI/PENUNJANG SAJA di mode analisis "Fibo & QM" ini. Opini Anda dipakai untuk MEMVALIDASI atau MEMBERI PERINGATAN terhadap temuan Fibonacci & Quasimodo (bukan penentu arah utama) — jangan berperilaku seolah opini Anda setara bobotnya dengan 2 spesialis utama.`;
+
+  return `Anda adalah AI spesialis futures crypto dengan peran: ${title}.
+${roleNote}
+Simbol: ${symbol}. Mode trading: ${tradeMode}.
+Analisa HANYA dari data JSON yang diberikan (jangan menebak di luar data itu).
+Beri opini SINGKAT (maksimal 5 kalimat): kesimpulan dari sudut pandang Anda, dan bias arah (Bullish/Bearish/Netral).
+Bahasa Indonesia, langsung ke inti, tanpa basa-basi.
+WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" atau "Bias: Bearish" atau "Bias: Netral" (pilih satu, tanpa tambahan kata lain di baris itu — ini dipakai sistem untuk menghitung tally otomatis).`;
+}
+
+export const FIBO_QM_ANALYSTS = [
+  {
+    number: 1,
+    key: "fibonacci",
+    title: "Spesialis Fibonacci Retracement",
+    kind: "api",
+    role: "primary",
+    buildSystemPrompt: (symbol, tradeMode) =>
+      `${fiboQmHeader("Spesialis Fibonacci Retracement", symbol, tradeMode, "primary")}\nTugas: baca data "fibonacci" (arah ditentukan otomatis dari swing high/low terbaru — "retracement_turun" berarti abis naik & cari support koreksi, "retracement_naik" berarti abis turun & cari resistance koreksi). WAJIB sebutkan level kunci (0.382/0.5/0.618) dengan ANGKA HARGA PERSIS dari data, dan nilai apakah harga sekarang sudah mendekati/berada di salah satu level itu (zona reaksi potensial).`,
+    buildDataSlice: (pkg) => ({
+      lastPrice: pkg.lastPrice,
+      fibonacci: pkg.fiboQm?.fibonacci ?? null,
+    }),
+  },
+  {
+    number: 2,
+    key: "quasimodo",
+    title: "Spesialis Pola Quasimodo (QM)",
+    kind: "api",
+    role: "primary",
+    buildSystemPrompt: (symbol, tradeMode) =>
+      `${fiboQmHeader("Spesialis Pola Quasimodo (QM)", symbol, tradeMode, "primary")}\nTugas: baca data "quasimodo" (heuristik pola reversal 3 titik: baseLow/baseHigh -> neckline -> head, field "confirmed" menandakan apakah breakout balik lewat neckline sudah terjadi). Kalau data null, berarti TIDAK ADA pola QM valid terdeteksi dalam data saat ini — sebutkan itu apa adanya dan beri opini Netral untuk dimensi ini SAJA (jangan mengarang pola yang tidak ada di data). Kalau ada, jelaskan level neckline (zona entry potensial) dan apakah confirmed true/false.`,
+    buildDataSlice: (pkg) => ({
+      lastPrice: pkg.lastPrice,
+      quasimodo: pkg.fiboQm?.quasimodo ?? null,
+    }),
+  },
+  {
+    number: 3,
+    key: "trend_support",
+    title: "Trend (Moving Averages) — Penunjang",
+    kind: "api",
+    role: "supporting",
+    buildSystemPrompt: (symbol, tradeMode) =>
+      `${fiboQmHeader("Trend (Moving Averages)", symbol, tradeMode, "supporting")}\nTugas: tentukan Uptrend/Downtrend/Choppy dari posisi harga vs EMA20/50/200. Nilai APAKAH trend ini MENDUKUNG atau BERTENTANGAN dengan bias dari level Fibonacci/QM (Anda tidak melihat opini AI lain secara langsung, cukup nilai trend dari data Anda sendiri apa adanya).`,
+    buildDataSlice: (pkg) => ({
+      lastPrice: pkg.lastPrice,
+      ema20: pkg.primary.indicators.ema20,
+      ema50: pkg.primary.indicators.ema50,
+      ema200: pkg.primary.indicators.ema200,
+    }),
+  },
+  {
+    number: 4,
+    key: "momentum_support",
+    title: "Momentum (Oscillators) — Penunjang",
+    kind: "api",
+    role: "supporting",
+    buildSystemPrompt: (symbol, tradeMode) =>
+      `${fiboQmHeader("Momentum (Oscillators)", symbol, tradeMode, "supporting")}\nTugas: baca RSI, MACD, Stochastic. Nilai apakah momentum saat ini mendukung kemungkinan reaksi/reversal di zona harga saat ini (misal RSI oversold/overbought memperkuat potensi reaksi di level kunci), atau justru menunjukkan momentum masih kuat searah trend (kurang mendukung reversal).`,
+    buildDataSlice: (pkg) => ({
+      rsi14: pkg.primary.indicators.rsi14,
+      macd: pkg.primary.indicators.macd,
+      stochastic: pkg.primary.indicators.stochastic,
+    }),
+  },
+  {
+    number: 5,
+    key: "volume_support",
+    title: "Volume (Aliran Uang) — Penunjang",
+    kind: "api",
+    role: "supporting",
+    buildSystemPrompt: (symbol, tradeMode) =>
+      `${fiboQmHeader("Volume (Aliran Uang)", symbol, tradeMode, "supporting")}\nTugas: baca On-Balance Volume (OBV). Konfirmasi apakah pergerakan menuju/menjauhi level kunci didukung volume nyata (valid) atau lemah (indikasi fakeout, patut diwaspadai kalau mau entry di zona Fibo/QM).`,
+    buildDataSlice: (pkg) => ({
+      obv: pkg.primary.indicators.obv,
+      lastPrice: pkg.lastPrice,
+    }),
+  },
+  {
+    number: 6,
+    key: "risk_management_fiboqm",
+    title: "Risk Management (Kalkulator Setup)",
+    kind: "api",
+    role: "supporting",
+    buildSystemPrompt: (symbol, tradeMode) =>
+      `${fiboQmHeader("Risk Management", symbol, tradeMode, "supporting")}\nTugas: JANGAN menebak arah pasar. Rumuskan trading plan berbasis level Fibonacci/QM yang sudah diberikan DIGABUNG dengan ATR: usulkan Stop-Loss logis (taruh sedikit di LUAR level kunci terdekat, tambah buffer dari ATR — jangan taruh SL PERSIS di level kunci karena rawan wick), usulkan Take-Profit ke level kunci berikutnya, dan rasio Risk:Reward minimum yang wajar untuk mode trading ini.`,
+    buildDataSlice: (pkg) => ({
+      lastPrice: pkg.lastPrice,
+      atr14: pkg.primary.indicators.atr14,
+      tradeMode: pkg.tradeMode,
+      fibonacciLevels: pkg.fiboQm?.fibonacci?.levels ?? null,
+      quasimodoLevel: pkg.fiboQm?.quasimodo?.qmLevel ?? null,
+    }),
+  },
+];
+
 export function getAnalystsForMode(aiMode) {
-  return aiMode === "cepat" ? ANALYSTS.filter((a) => a.quick) : ANALYSTS;
+  if (aiMode === "cepat") return ANALYSTS.filter((a) => a.quick);
+  if (aiMode === "fiboqm") return FIBO_QM_ANALYSTS;
+  return ANALYSTS;
 }

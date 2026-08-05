@@ -21,13 +21,33 @@ const CANDLE_COUNT = 120;
 const BOX_GAP_FRACTION = 0.03; // jarak kosong sebelum kotak
 const BOX_WIDTH_FRACTION = 0.3; // lebar kotak
 
+// Warna per rasio Fibonacci, mengikuti konvensi umum (mirip TradingView)
+// supaya gampang dibedain sekilas: abu-abu di ujung (0 & 1), lalu gradasi
+// merah->oranye->hijau->tosca->cyan di tengah.
+const FIB_COLORS = {
+  0: "#6b7280",
+  0.236: "#dc2626",
+  0.382: "#f97316",
+  0.5: "#16a34a",
+  0.618: "#0d9488",
+  0.786: "#0891b2",
+  1: "#6b7280",
+};
+
 /**
  * Return ArrayBuffer (bytes PNG) siap dikirim lewat sendPhoto().
  * entry/sl/tp boleh null (kalau gagal ke-parse, atau decision-nya WAIT) —
  * kotak zonanya cuma dilewatin, chart tetap jalan dengan garis harga
  * sekarang.
+ *
+ * @param {object|null} fiboLevels - opsional, khusus mode "Fibo & QM":
+ *   objek { "0": harga, "0.236": harga, ..., "1": harga } dari
+ *   fiboQm.buildDirectionalFibonacci(). Kalau diisi, digambar sebagai garis
+ *   horizontal putus-putus PENUH LEBAR chart + label rasio & harganya.
+ * @param {number|null} qmLevel - opsional, harga level neckline QM (dari
+ *   fiboQm.detectQuasimodo().qmLevel). Digambar sebagai 1 garis terpisah.
  */
-export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, decision }) {
+export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, decision, fiboLevels, qmLevel }) {
   const candles = await fetchKlines(symbol, interval, CANDLE_COUNT);
 
   const closes = candles.map((c) => c.close);
@@ -108,6 +128,22 @@ export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, d
     });
     return datasetIndex;
   };
+
+  // --- Garis Fibonacci Retracement (khusus mode "Fibo & QM") ---
+  // Digambar PENUH LEBAR chart (firstX ke lastX, bukan boxRange) karena ini
+  // level referensi historis, bukan zona Entry/TP/SL yang baru "diusulkan".
+  if (fiboLevels) {
+    for (const [ratio, price] of Object.entries(fiboLevels)) {
+      if (price == null) continue;
+      const color = FIB_COLORS[ratio] || "#9ca3af";
+      addLevel(price, `Fibo ${ratio}`, color, null, [firstX, lastX]);
+    }
+  }
+
+  // --- Garis level neckline Quasimodo (QM), kalau ada pola terdeteksi ---
+  if (qmLevel != null) {
+    addLevel(qmLevel, "QM Level", "#a855f7", null, [firstX, lastX]);
+  }
 
   // Entry/TP/SL digambar di kotak yang terpisah dari candle (ada jarak
   // kosong dulu), bukan garis penuh dari ujung ke ujung chart lagi.
