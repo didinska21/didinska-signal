@@ -15,6 +15,7 @@ import {
   TRADE_MODE_SELECT_TEXT,
   tradeModeKeyboard,
   symbolPromptText,
+  symbolPromptKeyboard,
   aiModePromptText,
   aiModeKeyboard,
   chartPhotoPromptText,
@@ -225,7 +226,19 @@ async function handleCallbackQuery(env, callbackQuery) {
 
     await setTradeMode(env, chatId, tradeModeKey);
     await setMode(env, chatId, "awaiting_symbol");
-    await editMessageText(env, chatId, messageId, symbolPromptText(tradeModeKey), backOnlyKeyboard("back_main"));
+    await editMessageText(env, chatId, messageId, symbolPromptText(tradeModeKey), symbolPromptKeyboard());
+    return;
+  }
+
+  // --- Tombol pintasan simbol (saat ini cuma XAUUSD/MT5) ---
+  if (data.startsWith("symbol_")) {
+    const currentMode = await getMode(env, chatId);
+    if (currentMode !== "awaiting_symbol") return; // tombol basi
+
+    const symbol = normalizeSymbol(data.replace("symbol_", ""));
+    await setSymbol(env, chatId, symbol);
+    await setMode(env, chatId, "choosing_ai_mode");
+    await editMessageText(env, chatId, messageId, aiModePromptText(symbol), aiModeKeyboard());
     return;
   }
 
@@ -407,7 +420,7 @@ async function beginAnalysis(env, chatId, callbackMessageId) {
   }
 
   try {
-    const dataPackage = await buildMarketDataPackage(symbol, tradeMode);
+    const dataPackage = await buildMarketDataPackage(env, symbol, tradeMode);
     await startAnalysis(env, chatId, messageId, dataPackage);
   } catch (err) {
     console.error("Gagal ambil data pasar:", err);
