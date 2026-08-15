@@ -126,8 +126,19 @@ export function symbolPromptText(tradeModeKey) {
 
 Ketik simbol pair futures yang mau dianalisa, contoh: <b>BTCUSDT</b>, <b>ETHUSDT</b>, <b>SOLUSDT</b>.
 
-(Data candle diambil otomatis dari Binance Futures, fallback ke Bybit kalau gagal)
+Atau tekan tombol <b>XAUUSD</b> di bawah untuk pair Gold via MT5 (data & harga dari broker kamu sendiri, lihat README bagian MT5 Bridge).
+
+(Data candle pair kripto diambil otomatis dari Binance Futures, fallback ke Bybit kalau gagal)
 Ketik /batal untuk membatalkan.`;
+}
+
+export function symbolPromptKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "🥇 XAUUSD (Gold/MT5)", callback_data: "symbol_XAUUSD" }],
+      [{ text: "⬅️ Kembali", callback_data: "back_main" }],
+    ],
+  };
 }
 
 // --- Pilih mode analisis: Cepat (5 AI, data API) vs Lengkap (10 AI + foto) vs Fibo & QM (6 AI) ---

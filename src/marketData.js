@@ -3,7 +3,7 @@
  * + SMC + pivot points + data makro jadi 1 paket JSON, siap dikirim sebagai
  * konteks ke tiap AI spesialis (kecuali AI Price Action yang pakai foto).
  */
-import { fetchKlines } from "./binance.js";
+import { fetchKlines } from "./marketSource.js";
 import { buildIndicatorSummary } from "./indicators.js";
 import { buildSmcSummary } from "./smc.js";
 import { buildMacroSummary } from "./macroData.js";
@@ -24,13 +24,13 @@ export function normalizeSymbol(rawSymbol) {
   return rawSymbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-export async function buildMarketDataPackage(symbol, tradeMode) {
+export async function buildMarketDataPackage(env, symbol, tradeMode) {
   const tf = TIMEFRAME_CONFIG[tradeMode] || TIMEFRAME_CONFIG.scalping;
 
   const [primaryCandles, htfCandles, dailyCandles] = await Promise.all([
-    fetchKlines(symbol, tf.primary, CANDLE_LIMIT),
-    fetchKlines(symbol, tf.htf, CANDLE_LIMIT),
-    fetchKlines(symbol, "1d", 3),
+    fetchKlines(env, symbol, tf.primary, CANDLE_LIMIT),
+    fetchKlines(env, symbol, tf.htf, CANDLE_LIMIT),
+    fetchKlines(env, symbol, "1d", 3),
   ]);
 
   const primaryIndicators = buildIndicatorSummary(primaryCandles);

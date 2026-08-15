@@ -10,7 +10,7 @@
  * makanya request ke QuickChart eksplisit set "version": "3" dan opsi
  * `scales` pakai sintaks v3 (bukan xAxes/yAxes ala v2).
  */
-import { fetchKlines } from "./binance.js";
+import { fetchKlines } from "./marketSource.js";
 
 const CANDLE_COUNT = 120;
 // Kotak zona Entry/TP/SL digambar di ruang kosong sebelah kanan candle
@@ -47,8 +47,8 @@ const FIB_COLORS = {
  * @param {number|null} qmLevel - opsional, harga level neckline QM (dari
  *   fiboQm.detectQuasimodo().qmLevel). Digambar sebagai 1 garis terpisah.
  */
-export async function buildSignalChartImage({ symbol, interval, entry, sl, tp, decision, fiboLevels, qmLevel }) {
-  const candles = await fetchKlines(symbol, interval, CANDLE_COUNT);
+export async function buildSignalChartImage({ env, symbol, interval, entry, sl, tp, decision, fiboLevels, qmLevel }) {
+  const candles = await fetchKlines(env, symbol, interval, CANDLE_COUNT);
 
   const closes = candles.map((c) => c.close);
   const firstX = candles[0].closeTime;

@@ -1,7 +1,90 @@
 import { handleUpdate } from "./handlers/router.js";
+import { sendMessage } from "./telegram.js";
+import { escapeHtml } from "./htmlUtil.js";
 
 export { SessionDO } from "./session_do.js";
 export { SignalLogDO } from "./signal_log_do.js";
+export { Mt5BridgeDO } from "./mt5_bridge_do.js";
+
+/**
+ * Cek header X-Bridge-Secret cocok dengan env.MT5_BRIDGE_SECRET.
+ * Endpoint /mt5-bridge/* ini dipanggil oleh mt5_bridge.py (jalan di
+ * laptop/VPS kamu), BUKAN dari Telegram — jadi butuh proteksi terpisah
+ * dari TELEGRAM_WEBHOOK_SECRET supaya orang lain tidak bisa nge-push
+ * candle palsu atau nyolong hasil sinyal lewat endpoint ini.
+ */
+function isAuthorizedBridge(request, env) {
+  if (!env.MT5_BRIDGE_SECRET) return true; // tidak di-set = terbuka (tidak disarankan, sama seperti ALLOWED_CHAT_IDS)
+  return request.headers.get("X-Bridge-Secret") === env.MT5_BRIDGE_SECRET;
+}
+
+function getMt5Stub(env, symbol) {
+  const id = env.MT5_BRIDGE_DO.idFromName(symbol);
+  return env.MT5_BRIDGE_DO.get(id);
+}
+
+async function handleMt5BridgeRequest(request, env, pathname) {
+  if (!isAuthorizedBridge(request, env)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  // --- Bridge push candle terbaru: POST /mt5-bridge/candles ---
+  if (pathname === "/mt5-bridge/candles" && request.method === "POST") {
+    const body = await request.json();
+    const { symbol, interval, candles } = body;
+    if (!symbol || !interval || !Array.isArray(candles)) {
+      return Response.json({ ok: false, error: "symbol/interval/candles wajib diisi" }, { status: 400 });
+    }
+    const stub = getMt5Stub(env, symbol);
+    const res = await stub.fetch("https://mt5-bridge/pushCandles", {
+      method: "POST",
+      body: JSON.stringify({ interval, candles }),
+    });
+    return new Response(await res.text(), { status: res.status, headers: { "Content-Type": "application/json" } });
+  }
+
+  // --- Bridge polling sinyal yang perlu dieksekusi: GET /mt5-bridge/signal?symbol=XAUUSD ---
+  if (pathname === "/mt5-bridge/signal" && request.method === "GET") {
+    const url = new URL(request.url);
+    const symbol = url.searchParams.get("symbol");
+    if (!symbol) return Response.json({ ok: false, error: "parameter symbol wajib diisi" }, { status: 400 });
+    const stub = getMt5Stub(env, symbol);
+    const res = await stub.fetch("https://mt5-bridge/pollSignal");
+    return new Response(await res.text(), { status: res.status, headers: { "Content-Type": "application/json" } });
+  }
+
+  // --- Bridge lapor hasil eksekusi: POST /mt5-bridge/execution ---
+  if (pathname === "/mt5-bridge/execution" && request.method === "POST") {
+    const body = await request.json();
+    const { symbol, signalId, chatId, status, ticket, fillPrice, message } = body;
+    if (!symbol || !signalId) {
+      return Response.json({ ok: false, error: "symbol/signalId wajib diisi" }, { status: 400 });
+    }
+    const stub = getMt5Stub(env, symbol);
+    const res = await stub.fetch("https://mt5-bridge/reportExecution", {
+      method: "POST",
+      body: JSON.stringify({ signalId, status, ticket, fillPrice, message }),
+    });
+
+    // Notifikasi ke user Telegram tentang hasil eksekusi (best-effort, tidak
+    // menggagalkan response ke bridge kalau notifikasi gagal terkirim).
+    if (chatId) {
+      try {
+        const text =
+          status === "filled"
+            ? `✅ <b>Order tereksekusi di MT5</b>\nSimbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket ?? "-"))}\nHarga fill: ${escapeHtml(String(fillPrice ?? "-"))}`
+            : `❌ <b>Order GAGAL dieksekusi di MT5</b>\nSimbol: ${escapeHtml(symbol)}\nAlasan: ${escapeHtml(message || "tidak diketahui")}`;
+        await sendMessage(env, chatId, text);
+      } catch (err) {
+        console.error("Gagal kirim notifikasi hasil eksekusi MT5:", err);
+      }
+    }
+
+    return new Response(await res.text(), { status: res.status, headers: { "Content-Type": "application/json" } });
+  }
+
+  return new Response("Not found", { status: 404 });
+}
 
 /**
  * Bot ini sekarang berbasis WEBHOOK (interaktif), bukan cron push otomatis.
@@ -39,6 +122,10 @@ export default {
         console.error("Webhook error:", err);
         return new Response("Error", { status: 500 });
       }
+    }
+
+    if (url.pathname.startsWith("/mt5-bridge/")) {
+      return handleMt5BridgeRequest(request, env, url.pathname);
     }
 
     // Endpoint root: sekadar health-check manual, bukan trigger sinyal.

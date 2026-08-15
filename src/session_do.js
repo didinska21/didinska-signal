@@ -18,12 +18,18 @@ import { mainMenuKeyboard, signalResultKeyboard } from "./menus.js";
 import { escapeHtml, formatTelegramHtml } from "./htmlUtil.js";
 import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
 import { buildMarketDataPackage } from "./marketData.js";
-import { fetchCurrentPrice } from "./binance.js";
+import { fetchCurrentPrice, isMt5Symbol } from "./marketSource.js";
 import { buildSignalChartImage } from "./ChartImage.js";
+import { enqueueMt5Execution } from "./mt5Exec.js";
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
+
+// Lot default untuk eksekusi otomatis ke MT5 (demo). Bisa dioverride lewat
+// env var MT5_DEFAULT_LOT. Ini SENGAJA fixed-lot sederhana (bukan position
+// sizing berbasis % risiko akun) — cukup untuk tahap demo/testing awal.
+const DEFAULT_MT5_LOT = 0.01;
 
 export class SessionDO {
   constructor(state, env) {
@@ -306,6 +312,46 @@ export class SessionDO {
           createdAt: Date.now(),
         });
         resultKeyboard = signalResultKeyboard(signalId);
+
+        // --- Eksekusi otomatis ke MT5 (khusus simbol yang datanya dari MT5
+        // bridge, misal XAUUSD) — antre sinyal buat diambil & dieksekusi
+        // bridge Python di laptop/VPS kamu. Kalau SL/TP/Entry gagal ke-parse
+        // (null), JANGAN antre eksekusi — lebih aman diam & kasih tahu user,
+        // daripada bridge eksekusi order tanpa SL/TP yang jelas.
+        if (isMt5Symbol(symbol) && !job.isAuto) {
+          if (entryPrice == null || slPrice == null || tpPrice == null) {
+            await sendMessage(
+              this.env,
+              chatId,
+              `⚠️ Sinyal ${decision} muncul tapi Entry/SL/TP gagal terbaca lengkap dari teks AI Penyimpul — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan. Silakan cek manual teks sinyal di atas.`
+            );
+          } else {
+            try {
+              const lot = Number(this.env.MT5_DEFAULT_LOT) || DEFAULT_MT5_LOT;
+              await enqueueMt5Execution(this.env, symbol, {
+                signalId,
+                chatId,
+                decision,
+                entry: entryPrice,
+                sl: slPrice,
+                tp: tpPrice,
+                lot,
+              });
+              await sendMessage(
+                this.env,
+                chatId,
+                `🔗 Sinyal ${decision} sudah diantre ke MT5 bridge (lot ${lot}). Menunggu bridge Python di laptop kamu mengambil & mengeksekusi — kamu akan dikirimi notifikasi begitu order tereksekusi (atau gagal).`
+              );
+            } catch (err) {
+              console.error("Gagal antre eksekusi MT5:", err);
+              await sendMessage(
+                this.env,
+                chatId,
+                `⚠️ Gagal mengantre sinyal ${decision} ke MT5 bridge: ${escapeHtml(err.message)}\n\n(Sinyal teks di atas tetap valid, cuma eksekusi otomatisnya gagal — bisa entry manual kalau perlu.)`
+              );
+            }
+          }
+        }
       }
 
       await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignalFixed), resultKeyboard);
@@ -315,6 +361,7 @@ export class SessionDO {
           const primaryInterval = dataPackage?.primaryInterval || "15m";
           const isFiboQmMode = aiMode === "fiboqm";
           const imageBytes = await buildSignalChartImage({
+            env: this.env,
             symbol,
             interval: primaryInterval,
             entry: entryPrice,
@@ -391,7 +438,7 @@ export class SessionDO {
     try {
       const sent = await sendMessage(this.env, chatId, `🤖 <b>Auto-Signal</b> — mengambil data pasar ${symbol}...`);
       const messageId = sent?.result?.message_id;
-      const dataPackage = await buildMarketDataPackage(symbol, tradeMode);
+      const dataPackage = await buildMarketDataPackage(this.env, symbol, tradeMode);
 
       await this.storage.put("job", {
         chatId,
@@ -436,7 +483,7 @@ export class SessionDO {
 
     let currentPrice;
     try {
-      currentPrice = await fetchCurrentPrice(symbol);
+      currentPrice = await fetchCurrentPrice(this.env, symbol);
     } catch (err) {
       console.error("Gagal ambil harga terkini buat cek TP/SL:", err);
       return;
