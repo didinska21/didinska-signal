@@ -22,6 +22,13 @@ class_name = "SessionDO"
 name = "SIGNAL_LOG_DO"
 class_name = "SignalLogDO"
 
+# Durable Object jembatan MT5: 1 instance PER SIMBOL (misal "XAUUSD"),
+# nyimpen cache candle yang di-push bridge Python + antrian sinyal yang
+# perlu dieksekusi ke MT5. Lihat src/mt5_bridge_do.js.
+[[durable_objects.bindings]]
+name = "MT5_BRIDGE_DO"
+class_name = "Mt5BridgeDO"
+
 # Migration wajib ada saat pertama kali Durable Object class ini dideploy.
 # new_sqlite_classes dipakai supaya tetap gratis di Workers Free plan.
 [[migrations]]
@@ -35,6 +42,13 @@ new_sqlite_classes = ["SessionDO"]
 tag = "v2"
 new_sqlite_classes = ["SignalLogDO"]
 
+# Migration baru khusus buat Mt5BridgeDO — sama alasannya, migration lama
+# (v1, v2) JANGAN diubah/dihapus.
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Mt5BridgeDO"]
+
 # Secrets (set via CLI atau dashboard Cloudflare, JANGAN ditulis di sini):
 #   npx wrangler secret put GROQ_API_KEY
 #   npx wrangler secret put TELEGRAM_BOT_TOKEN
+#   npx wrangler secret put MT5_BRIDGE_SECRET

@@ -46,3 +46,15 @@ GROQ_SUMMARIZER_API_KEY=
 GROQ_VISION_MODEL=
 GROQ_SUMMARY_MODEL=
 GROQ_TEXT_MODEL=
+
+# --- MT5 Bridge (XAUUSD) ---
+# Secret token buat verifikasi request dari mt5_bridge.py (script Python di
+# laptop/VPS kamu yang connect ke MT5). WAJIB diisi (string acak, misal hasil
+# `openssl rand -hex 32`), supaya orang lain tidak bisa push candle palsu
+# atau nyolong hasil sinyal lewat endpoint /mt5-bridge/*.
+MT5_BRIDGE_SECRET=
+
+# Ukuran lot default untuk eksekusi otomatis ke MT5 (demo). Default 0.01
+# kalau tidak diisi. Ini FIXED LOT sederhana, bukan position sizing
+# berbasis % risiko akun.
+MT5_DEFAULT_LOT=0.01

@@ -25,7 +25,11 @@ src/
   htmlUtil.js                # escapeHtml() bersama, dipakai sebelum kirim teks apa pun (opini AI, error, dll) sebagai parse_mode HTML
 
   # --- Data pasar & indikator ---
+  marketSource.js             # dispatcher: XAUUSD -> MT5 bridge, pair lain -> Binance/Bybit
   binance.js                 # fetch candle OHLCV (Binance Futures, fallback Bybit)
+  mt5Source.js                # baca cache candle XAUUSD dari Mt5BridgeDO
+  mt5_bridge_do.js              # Durable Object: cache candle + antrian sinyal eksekusi MT5 (1 instance/simbol)
+  mt5Exec.js                   # helper antre sinyal eksekusi ke Mt5BridgeDO (dipanggil session_do.js)
   indicators.js                # EMA/RSI/MACD/ATR/Bollinger/Stochastic/OBV/Pivot/Fibonacci
   smc.js                         # heuristik Smart Money Concept (Order Block, FVG, BoS, Liquidity Grab)
   macroData.js                     # BTC Dominance (CoinGecko) & Fear/Greed Index (alternative.me)
@@ -147,7 +151,31 @@ Menguji fungsi-fungsi indikator (`indicators.js`) dan heuristik Smart Money Conc
 - Data makro (`macroData.js`) fault-tolerant: kalau API BTC Dominance/Fear-Greed sedang down, field-nya jadi `null` dan AI 9 akan menyebutkan data tidak tersedia — proses tidak akan gagal total karena ini.
 - Binance Futures API kadang men-geoblock IP datacenter Cloudflare (403) — sudah ada fallback otomatis ke Bybit.
 
+## MT5 Bridge (XAUUSD) — eksekusi otomatis ke MetaTrader 5
+
+Selain pair kripto (Binance/Bybit), bot ini sekarang bisa analisa **XAUUSD**
+dengan data candle langsung dari server broker kamu (via MT5), dan
+mengeksekusi otomatis hasil sinyal BUY/SELL ke akun MT5 **demo**.
+
+- `src/mt5_bridge_do.js` — Durable Object cache candle + antrian sinyal, 1 instance per simbol
+- `src/marketSource.js` — dispatcher: XAUUSD → MT5 bridge, pair lain → Binance/Bybit (tidak berubah)
+- `mt5_bridge/mt5_bridge.py` — script Python yang kamu jalankan di laptop (nanti VPS), connect ke MT5, push candle & eksekusi order
+
+Alur: pilih mode trading → pilih **XAUUSD** (tombol pintasan tersedia) →
+pilih mode AI (Cepat/Lengkap/Fibo&QM) → kalau hasilnya BUY/SELL dengan
+Entry/SL/TP lengkap, bot otomatis antre eksekusi ke bridge → bridge
+eksekusi ke MT5 demo → notifikasi hasil dikirim balik ke Telegram. Kalau
+WAIT, tidak ada eksekusi sama sekali.
+
+Setup lengkap: lihat `mt5_bridge/README.md`.
+
+⚠️ Masih **demo only**, lot size fixed sederhana (belum position sizing
+berbasis risiko akun), dan bridge baru jalan lokal (laptop) — belum 24 jam
+via VPS.
+
 ## Roadmap berikutnya
+- [ ] Pindahkan MT5 bridge dari laptop ke VPS supaya jalan 24 jam
+- [ ] Position sizing berbasis % risiko akun (bukan lot fixed)
 - [ ] Fungsi Jadwal News (FOMC/NFP/PPI/CPI) — ambil data kalender ekonomi real
 - [ ] Kemungkinan fitur tambahan lain (menyusul)
 
