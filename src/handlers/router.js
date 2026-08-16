@@ -247,14 +247,10 @@ async function handleCallbackQuery(env, callbackQuery) {
     const aiMode = data === "ai_mode_cepat" ? "cepat" : data === "ai_mode_lengkap" ? "lengkap" : "fiboqm";
     await setAiMode(env, chatId, aiMode);
 
-    if (aiMode === "lengkap") {
-      const tradeMode = await getTradeMode(env, chatId);
-      await setMode(env, chatId, "awaiting_chart");
-      await editMessageText(env, chatId, messageId, chartPhotoPromptText(tradeMode), backOnlyKeyboard("back_main"));
-      return;
-    }
-
-    // Mode Cepat & Fibo/QM: langsung mulai, tidak perlu foto
+    // Semua mode (Cepat, Lengkap, Fibo & QM) sekarang murni berbasis data
+    // numerik — tidak ada AI yang butuh foto chart lagi (AI 7 Price Action
+    // sudah diganti jadi analisa OHLC mentah, bukan analisa gambar), jadi
+    // semua mode langsung mulai analisa tanpa perlu nunggu foto dari user.
     await editMessageText(env, chatId, messageId, "⏳ Mengambil data pasar & memulai analisis...");
     await beginAnalysis(env, chatId, messageId, null);
     return;
