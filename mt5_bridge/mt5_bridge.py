@@ -111,6 +111,40 @@ def connect_mt5():
         mt5.symbol_select(SYMBOL, True)
 
 
+# Retcode paling umum yang bakal ketemu (referensi: dokumentasi MQL5
+# TRADE_RETCODE). Kalau ada retcode lain yang tidak ada di daftar ini,
+# tetap ditampilkan apa adanya (angka mentah) supaya tidak menyesatkan.
+RETCODE_DESCRIPTIONS = {
+    0: "Retcode 0 (tidak standar) — biasanya muncul kalau pasar tutup atau request tidak sempat diproses server broker. Cek juga 'last_error' di log untuk detail tambahan.",
+    10004: "Requote (harga berubah, order ditolak)",
+    10006: "Request ditolak broker",
+    10007: "Request dibatalkan trader",
+    10008: "Order sudah di-tempatkan",
+    10009: "Order sukses (Done)",
+    10010: "Hanya sebagian volume yang tereksekusi",
+    10011: "Request error/tidak valid",
+    10012: "Timeout, request dibatalkan",
+    10013: "Request tidak valid",
+    10014: "Volume tidak valid",
+    10015: "Harga tidak valid",
+    10016: "SL/TP tidak valid (kemungkinan terlalu dekat dari harga pasar)",
+    10017: "Trading dinonaktifkan",
+    10018: "PASAR SEDANG TUTUP (market closed) — coba lagi saat jam pasar buka",
+    10019: "Dana tidak cukup untuk eksekusi order",
+    10020: "Harga berubah (price changed)",
+    10021: "Tidak ada harga (off quotes)",
+    10025: "Autotrading dinonaktifkan di sisi terminal (tombol Algo Trading mati)",
+    10027: "Autotrading dinonaktifkan di akun/broker",
+    10031: "Tidak ada koneksi ke server trade",
+    10033: "Jumlah order pending sudah mencapai limit",
+    10034: "Jumlah volume order sudah mencapai limit",
+}
+
+
+def describe_retcode(code):
+    return RETCODE_DESCRIPTIONS.get(code, f"Retcode {code} tidak dikenal (cek dokumentasi MQL5 TRADE_RETCODE)")
+
+
 def candle_to_dict(rate):
     # MT5 rate: (time, open, high, low, close, tick_volume, spread, real_volume)
     # time dari MT5 dalam detik UNIX (UTC) -> Worker/bot expect milidetik,
@@ -213,12 +247,20 @@ def execute_order(signal):
     result = mt5.order_send(request_payload)
 
     if result is None:
-        report_execution(signal_id, chat_id, "failed", message=f"order_send mengembalikan None: {mt5.last_error()}")
+        err = mt5.last_error()
+        report_execution(signal_id, chat_id, "failed", message=f"order_send mengembalikan None. last_error={err}")
         return
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        log(f"❌ Order gagal, retcode={result.retcode}, comment={result.comment}")
-        report_execution(signal_id, chat_id, "failed", message=f"retcode {result.retcode}: {result.comment}")
+        err = mt5.last_error()
+        reason = describe_retcode(result.retcode)
+        log(f"❌ Order gagal, retcode={result.retcode} ({reason}), comment={result.comment}, last_error={err}")
+        report_execution(
+            signal_id,
+            chat_id,
+            "failed",
+            message=f"{reason} (retcode {result.retcode}, comment: {result.comment})",
+        )
         return
 
     log(f"✅ Order sukses. Ticket={result.order}, fill price={result.price}")
