@@ -315,15 +315,33 @@ export class SessionDO {
 
         // --- Eksekusi otomatis ke MT5 (khusus simbol yang datanya dari MT5
         // bridge, misal XAUUSD) — antre sinyal buat diambil & dieksekusi
-        // bridge Python di laptop/VPS kamu. Kalau SL/TP/Entry gagal ke-parse
-        // (null), JANGAN antre eksekusi — lebih aman diam & kasih tahu user,
-        // daripada bridge eksekusi order tanpa SL/TP yang jelas.
+        // bridge Python di laptop/VPS kamu.
         if (isMt5Symbol(symbol) && !job.isAuto) {
+          // Guard 1: SL/TP/Entry gagal ke-parse (null) — JANGAN antre
+          // eksekusi, lebih aman diam & kasih tahu user, daripada bridge
+          // eksekusi order tanpa SL/TP yang jelas.
           if (entryPrice == null || slPrice == null || tpPrice == null) {
             await sendMessage(
               this.env,
               chatId,
               `⚠️ Sinyal ${decision} muncul tapi Entry/SL/TP gagal terbaca lengkap dari teks AI Penyimpul — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan. Silakan cek manual teks sinyal di atas.`
+            );
+          }
+          // Guard 2: susunan Entry/SL/TP harus logis. BUY: TP > Entry > SL.
+          // SELL: TP < Entry < SL. Kalau kebalik/aneh (misalnya AI keliru
+          // menganalisa data candle yang beku saat pasar tutup), sinyal ini
+          // TIDAK BOLEH dieksekusi otomatis — order jadi tidak masuk akal
+          // (contoh nyata yang pernah kejadian: BUY dengan TP di BAWAH SL).
+          else if (
+            (decision === "BUY" && !(tpPrice > entryPrice && entryPrice > slPrice)) ||
+            (decision === "SELL" && !(tpPrice < entryPrice && entryPrice < slPrice))
+          ) {
+            await sendMessage(
+              this.env,
+              chatId,
+              `⚠️ Sinyal ${decision} dengan Entry ${entryPrice} / SL ${slPrice} / TP ${tpPrice} susunannya TIDAK LOGIS (untuk ${decision}, seharusnya ${
+                decision === "BUY" ? "TP > Entry > SL" : "TP < Entry < SL"
+              }) — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan. Kemungkinan penyebab: AI menganalisa data candle yang sudah tidak update (misal saat pasar tutup). Cek manual teks sinyal di atas sebelum entry sendiri.`
             );
           } else {
             try {
@@ -353,6 +371,7 @@ export class SessionDO {
           }
         }
       }
+
 
       await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignalFixed), resultKeyboard);
 

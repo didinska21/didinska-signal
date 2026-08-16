@@ -3,7 +3,7 @@
  * + SMC + pivot points + data makro jadi 1 paket JSON, siap dikirim sebagai
  * konteks ke tiap AI spesialis (kecuali AI Price Action yang pakai foto).
  */
-import { fetchKlines } from "./marketSource.js";
+import { fetchKlines, assertMarketOpen, isMt5Symbol } from "./marketSource.js";
 import { buildIndicatorSummary } from "./indicators.js";
 import { buildSmcSummary } from "./smc.js";
 import { buildMacroSummary } from "./macroData.js";
@@ -25,6 +25,8 @@ export function normalizeSymbol(rawSymbol) {
 }
 
 export async function buildMarketDataPackage(env, symbol, tradeMode) {
+  await assertMarketOpen(env, symbol);
+
   const tf = TIMEFRAME_CONFIG[tradeMode] || TIMEFRAME_CONFIG.scalping;
 
   const [primaryCandles, htfCandles, dailyCandles] = await Promise.all([
@@ -47,7 +49,14 @@ export async function buildMarketDataPackage(env, symbol, tradeMode) {
   const prevDailyCandle = dailyCandles[dailyCandles.length - 2] || dailyCandles[0];
   const pivot = pivotPoints(prevDailyCandle);
 
-  const macro = await buildMacroSummary();
+  // Data makro (BTC Dominance & Fear/Greed Index) itu KHUSUS pasar kripto —
+  // tidak relevan untuk simbol MT5 (misal XAUUSD). Untuk simbol MT5, jangan
+  // fetch data yang salah konteks; cukup tandai null + alasan, biar AI #9
+  // (Spesialis Konteks Makro) tahu untuk kasih penilaian netral eksplisit
+  // alih-alih memaksakan opini dari data yang tidak nyambung.
+  const macro = isMt5Symbol(symbol)
+    ? { notApplicable: true, reason: "Data makro kripto (BTC Dominance, Fear/Greed Index) tidak relevan untuk instrumen non-kripto seperti XAUUSD." }
+    : await buildMacroSummary();
 
   return {
     symbol,
@@ -55,7 +64,7 @@ export async function buildMarketDataPackage(env, symbol, tradeMode) {
     primaryInterval: tf.primary,
     htfInterval: tf.htf,
     lastPrice: primaryCandles[primaryCandles.length - 1].close,
-    primary: { interval: tf.primary, indicators: primaryIndicators },
+    primary: { interval: tf.primary, indicators: primaryIndicators, candles: primaryCandles },
     htf: { interval: tf.htf, indicators: htfIndicators },
     pivot,
     smc,

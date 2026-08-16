@@ -5,19 +5,26 @@
  * tumpang tindih), sesuai pembagian: Trend & Momentum, Volume & Level Kunci,
  * Pola & Konteks Lanjutan, dan Eksekusi (risk management).
  *
- * `quick: true` = termasuk dalam mode "Cepat" (5 AI, murni data API tanpa foto).
- * Mode "Lengkap" menjalankan seluruh 10 AI, termasuk AI 7 (Price Action) yang
- * butuh foto chart dari user.
+ * `quick: true` = termasuk dalam mode "Cepat" (5 AI, murni data API).
+ * Mode "Lengkap" menjalankan seluruh 10 AI. Semua AI di sini berbasis data
+ * numerik (candle OHLC/indikator) — TIDAK ADA yang butuh foto chart dari
+ * user (AI 7 dulu butuh foto, sekarang diganti analisa OHLC mentah).
  */
 
 function baseHeader(title, symbol, tradeMode) {
-  return `Anda adalah AI spesialis futures crypto dengan peran: ${title}.
+  return `Anda adalah AI spesialis trading futures dengan peran: ${title}.
 Simbol: ${symbol}. Mode trading: ${tradeMode}.
 Analisa HANYA dari data JSON yang diberikan (jangan menebak di luar data itu).
 Beri opini SINGKAT (maksimal 5 kalimat): kesimpulan dari sudut pandang Anda, dan bias arah (Bullish/Bearish/Netral).
 Bahasa Indonesia, langsung ke inti, tanpa basa-basi.
 WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" atau "Bias: Bearish" atau "Bias: Netral" (pilih satu, tanpa tambahan kata lain di baris itu — ini dipakai sistem untuk menghitung tally otomatis).`;
 }
+
+// Simbol yang datanya dari MT5 (lihat marketSource.js) — dipakai analyst
+// #9 (makro) buat tahu kapan harus kasih penilaian netral eksplisit,
+// karena data makro yang tersedia sekarang (BTC Dominance, Fear/Greed
+// Index) itu KHUSUS kripto, tidak relevan buat Gold/instrumen lain.
+const MT5_SYMBOLS = new Set(["XAUUSD"]);
 
 export const ANALYSTS = [
   {
@@ -70,7 +77,11 @@ export const ANALYSTS = [
     kind: "api",
     quick: false,
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Volume (Aliran Uang)", symbol, tradeMode)}\nTugas: baca On-Balance Volume (OBV). Konfirmasi apakah pergerakan harga didukung volume besar (valid) atau lemah (indikasi fakeout).`,
+      `${baseHeader("Spesialis Volume (Aliran Uang)", symbol, tradeMode)}\nTugas: baca On-Balance Volume (OBV). Konfirmasi apakah pergerakan harga didukung volume besar (valid) atau lemah (indikasi fakeout).${
+        MT5_SYMBOLS.has(symbol)
+          ? '\nCATATAN: untuk simbol ini, "volume" yang tersedia adalah TICK VOLUME dari MT5 (jumlah perubahan harga), BUKAN volume transaksi riil (pasar forex/CFD itu OTC, tidak ada bursa tunggal yang bisa kasih volume pasti). Beri opini dengan keyakinan LEBIH RENDAH dibanding kalau ini data kripto.'
+          : ""
+      }`,
     buildDataSlice: (pkg) => ({
       obv: pkg.primary.indicators.obv,
       lastPrice: pkg.lastPrice,
@@ -107,9 +118,20 @@ export const ANALYSTS = [
   {
     number: 7,
     key: "price_action",
-    title: "Spesialis Price Action (Candlestick, via Foto)",
-    kind: "photo",
-    quick: false, // pakai foto -> hanya jalan di mode Lengkap
+    title: "Spesialis Price Action (Candlestick, dari Data OHLC)",
+    kind: "api",
+    quick: false,
+    buildSystemPrompt: (symbol, tradeMode) =>
+      `${baseHeader("Spesialis Price Action (Candlestick)", symbol, tradeMode)}\nTugas: baca deretan candle OHLC mentah (open/high/low/close) beberapa candle terakhir. Identifikasi pola candlestick yang relevan (misal Bullish/Bearish Engulfing, Pin Bar/Hammer, Doji, Shooting Star, Marubozu) dan nilai apa artinya untuk momentum saat ini.`,
+    buildDataSlice: (pkg) => ({
+      candleTerakhir: pkg.primary.candles.slice(-15).map((c) => ({
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      })),
+      lastPrice: pkg.lastPrice,
+    }),
   },
   {
     number: 8,
@@ -138,11 +160,11 @@ export const ANALYSTS = [
   {
     number: 9,
     key: "macro",
-    title: "Spesialis Konteks Makro Kripto",
+    title: "Spesialis Konteks Makro",
     kind: "api",
     quick: false,
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Konteks Makro Kripto", symbol, tradeMode)}\nTugas: nilai sentimen pasar kripto secara umum dari BTC Dominance & Fear/Greed Index. Kalau data tidak tersedia (null), sebutkan itu dan beri opini netral untuk dimensi ini saja.`,
+      `${baseHeader("Spesialis Konteks Makro", symbol, tradeMode)}\nTugas: nilai sentimen pasar secara umum dari BTC Dominance & Fear/Greed Index (data khusus kripto). Kalau field "notApplicable" bernilai true (artinya simbol ini BUKAN kripto, misal XAUUSD/Gold), JANGAN memaksakan opini dari data itu — cukup sebutkan data makro ini tidak relevan untuk simbol ini, dan beri "Bias: Netral" untuk dimensi ini saja. Kalau data null (bukan notApplicable, tapi API gagal), sebutkan itu dan beri opini netral juga.`,
     buildDataSlice: (pkg) => pkg.macro,
   },
   {
@@ -175,7 +197,7 @@ function fiboQmHeader(title, symbol, tradeMode, role) {
       ? `PERAN ANDA: PEMEGANG PERTIMBANGAN UTAMA di mode analisis "Fibo & QM" ini. Opini Anda adalah dasar utama keputusan akhir — bukan sekadar 1 dari banyak suara.`
       : `PERAN ANDA: KONFIRMASI/PENUNJANG SAJA di mode analisis "Fibo & QM" ini. Opini Anda dipakai untuk MEMVALIDASI atau MEMBERI PERINGATAN terhadap temuan Fibonacci & Quasimodo (bukan penentu arah utama) — jangan berperilaku seolah opini Anda setara bobotnya dengan 2 spesialis utama.`;
 
-  return `Anda adalah AI spesialis futures crypto dengan peran: ${title}.
+  return `Anda adalah AI spesialis trading futures dengan peran: ${title}.
 ${roleNote}
 Simbol: ${symbol}. Mode trading: ${tradeMode}.
 Analisa HANYA dari data JSON yang diberikan (jangan menebak di luar data itu).
@@ -247,7 +269,11 @@ export const FIBO_QM_ANALYSTS = [
     kind: "api",
     role: "supporting",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${fiboQmHeader("Volume (Aliran Uang)", symbol, tradeMode, "supporting")}\nTugas: baca On-Balance Volume (OBV). Konfirmasi apakah pergerakan menuju/menjauhi level kunci didukung volume nyata (valid) atau lemah (indikasi fakeout, patut diwaspadai kalau mau entry di zona Fibo/QM).`,
+      `${fiboQmHeader("Volume (Aliran Uang)", symbol, tradeMode, "supporting")}\nTugas: baca On-Balance Volume (OBV). Konfirmasi apakah pergerakan menuju/menjauhi level kunci didukung volume nyata (valid) atau lemah (indikasi fakeout, patut diwaspadai kalau mau entry di zona Fibo/QM).${
+        MT5_SYMBOLS.has(symbol)
+          ? '\nCATATAN: untuk simbol ini, "volume" yang tersedia adalah TICK VOLUME dari MT5 (jumlah perubahan harga), BUKAN volume transaksi riil (pasar forex/CFD itu OTC). Beri opini dengan keyakinan LEBIH RENDAH dibanding kalau ini data kripto.'
+          : ""
+      }`,
     buildDataSlice: (pkg) => ({
       obv: pkg.primary.indicators.obv,
       lastPrice: pkg.lastPrice,
