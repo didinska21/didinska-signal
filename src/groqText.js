@@ -29,7 +29,8 @@ export async function analyzeWithGroqText(env, analystNumber, systemPrompt, data
     {
       model,
       temperature: 0.4,
-      max_tokens: 400,
+      max_tokens: 800,
+      reasoning_effort: "low", // biar reasoning-nya nggak makan habis jatah token, sisa cukup buat jawaban akhir (opini singkat)
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
