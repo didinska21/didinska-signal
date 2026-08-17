@@ -23,6 +23,7 @@ import {
   chartPhotoKeyboard,
   MAX_CHART_PHOTOS,
   riwayatStatsText,
+  TRADE_MODES,
 } from "../menus.js";
 import { listSignals, markSignalResult, summarizeSignalStats } from "../signalLog.js";
 import { formatNewsScheduleText, formatUpcomingAllText } from "../newsScheduleFormat.js";
@@ -45,6 +46,7 @@ import {
   getAutoMode,
 } from "../state.js";
 import { buildMarketDataPackage, normalizeSymbol } from "../marketData.js";
+import { isMt5Symbol } from "../marketSource.js";
 import { escapeHtml } from "../htmlUtil.js";
 
 const VALID_TRADE_MODES = ["scalping", "daytrade", "swing"];
@@ -101,19 +103,49 @@ async function handleMessage(env, message) {
     return;
   }
 
-  if (text === "/auto") {
+  if (text.startsWith("/auto")) {
     const alreadyOn = await getAutoMode(env, chatId);
     if (alreadyOn) {
       await sendMessage(env, chatId, "🤖 Auto-signal udah aktif. Ketik /stop_auto buat berhenti.");
       return;
     }
-    await startAutoSignal(env, chatId, { symbol: "BTCUSDT", tradeMode: "scalping", aiMode: "cepat" });
+
+    // Format: /auto [SIMBOL] [mode_trading]
+    // Contoh: /auto XAUUSD swing   -> XAUUSD, mode Swing
+    //         /auto BTCUSDT       -> BTCUSDT, mode Scalping (default)
+    //         /auto                -> BTCUSDT, mode Scalping (default lama, backward-compatible)
+    const parts = text.trim().split(/\s+/).slice(1); // buang "/auto"
+    const rawSymbol = parts[0];
+    const rawMode = parts[1];
+
+    const symbol = rawSymbol ? normalizeSymbol(rawSymbol) : "BTCUSDT";
+    const tradeMode = rawMode && TRADE_MODES[rawMode] ? rawMode : "scalping";
+
+    if (rawMode && !TRADE_MODES[rawMode]) {
+      await sendMessage(
+        env,
+        chatId,
+        `⚠️ Mode trading "${escapeHtml(rawMode)}" tidak dikenal, pakai salah satu: scalping, daytrade, swing. Memakai default: scalping.`
+      );
+    }
+
+    await startAutoSignal(env, chatId, { symbol, tradeMode, aiMode: "cepat" });
+
+    const modeLabel = TRADE_MODES[tradeMode]?.label || tradeMode;
     await sendMessage(
       env,
       chatId,
       `🤖 <b>Auto-Signal AKTIF</b>
 
-Bot bakal otomatis analisis <b>BTCUSDT</b> (mode Scalping, 5 AI) tiap <b>10 menit</b>, dan otomatis ngecek TP/SL sinyal sebelumnya terhadap harga terkini.
+Bot bakal otomatis analisis <b>${escapeHtml(symbol)}</b> (mode ${escapeHtml(modeLabel)}, 5 AI) tiap <b>10 menit</b>, dan otomatis ngecek TP/SL sinyal sebelumnya terhadap harga terkini.${
+        isMt5Symbol(symbol)
+          ? `\n\n${
+              env.MT5_AUTONOMOUS_XAUUSD === "true"
+                ? "🔓 Mode OTONOM aktif untuk simbol ini — sinyal BUY/SELL akan otomatis dieksekusi ke MT5 (dengan 3 kontrol risiko: 1 posisi terbuka, limit trade/hari, circuit breaker rugi harian)."
+                : "🔒 Mode otonom BELUM aktif (env MT5_AUTONOMOUS_XAUUSD belum \"true\") — bot cuma kirim sinyal teks, TIDAK eksekusi ke MT5."
+            }`
+          : ""
+      }
 
 ⚠️ Selama auto-signal aktif, sebaiknya jangan pakai "Signal Trade" manual di chat ini bareng, biar nggak saling tabrakan.
 
