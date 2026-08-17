@@ -161,6 +161,41 @@ def candle_to_dict(rate):
     }
 
 
+def report_account_status():
+    """
+    Lapor balance/equity akun & apakah ada posisi terbuka (dari bot ini,
+    dicek via MAGIC_NUMBER) ke Worker. Dipakai Worker buat 3 kontrol risiko
+    mode OTONOM: 1 posisi terbuka dalam satu waktu, limit trade/hari, dan
+    circuit breaker rugi harian. Dipanggil tiap siklus push candle.
+    """
+    try:
+        account_info = mt5.account_info()
+        if account_info is None:
+            log("⚠️ Gagal ambil info akun buat lapor status.")
+            return
+
+        positions = mt5.positions_get(symbol=SYMBOL)
+        open_ticket = None
+        if positions:
+            own_positions = [p for p in positions if p.magic == MAGIC_NUMBER]
+            if own_positions:
+                open_ticket = own_positions[0].ticket
+
+        requests.post(
+            f"{WORKER_URL}/mt5-bridge/status",
+            json={
+                "symbol": SYMBOL,
+                "balance": account_info.balance,
+                "equity": account_info.equity,
+                "openPositionTicket": open_ticket,
+            },
+            headers=HEADERS,
+            timeout=15,
+        )
+    except Exception as err:
+        log(f"⚠️ Error lapor status akun: {err}")
+
+
 def push_all_candles():
     for interval, mt5_tf in MT5_TIMEFRAMES.items():
         try:
@@ -299,6 +334,7 @@ def main():
             now = time.time()
             if now - last_push >= PUSH_INTERVAL_SEC:
                 push_all_candles()
+                report_account_status()
                 last_push = now
 
             poll_and_execute_signal()
