@@ -9,7 +9,7 @@
  */
 import { callGroqChatCompletion, getAnalystApiKey, dedicatedKeyLabel } from "./groqClient.js";
 
-const DEFAULT_TEXT_MODEL = "llama-3.3-70b-versatile";
+const DEFAULT_TEXT_MODEL = "openai/gpt-oss-120b";
 
 /**
  * @param {object} env - Cloudflare env (secrets & vars)
