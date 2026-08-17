@@ -58,3 +58,21 @@ MT5_BRIDGE_SECRET=
 # kalau tidak diisi. Ini FIXED LOT sederhana, bukan position sizing
 # berbasis % risiko akun.
 MT5_DEFAULT_LOT=0.01
+
+# --- Mode OTONOM (khusus XAUUSD) ---
+# Saklar UTAMA trading otonom (analisa -> eksekusi -> TANPA kamu pencet
+# apa-apa, jalan tiap 10 menit via auto-signal). HARUS diisi PERSIS "true"
+# (huruf kecil semua) untuk aktif. Kalau kosong/apa pun selain "true",
+# siklus auto TETAP jalan kirim sinyal teks seperti biasa, tapi TIDAK
+# PERNAH eksekusi ke MT5 — cuma jalur manual (klik tombol Telegram) yang
+# tetap bisa eksekusi otomatis.
+MT5_AUTONOMOUS_XAUUSD=false
+
+# Maksimal berapa trade yang boleh dieksekusi mode otonom per hari
+# (default 5 kalau tidak diisi).
+MT5_MAX_TRADES_PER_DAY=5
+
+# Circuit breaker: kalau equity akun turun sekian % dari equity di awal
+# hari (UTC), mode otonom BERHENTI eksekusi sampai hari berikutnya
+# (default 3 kalau tidak diisi).
+MT5_MAX_DAILY_LOSS_PCT=3

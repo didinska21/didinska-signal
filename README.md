@@ -173,6 +173,31 @@ Setup lengkap: lihat `mt5_bridge/README.md`.
 berbasis risiko akun), dan bridge baru jalan lokal (laptop) — belum 24 jam
 via VPS.
 
+## Mode OTONOM (khusus XAUUSD) — trading tanpa pencet apa-apa
+
+Selain eksekusi manual (kamu klik tombol Signal Trade di Telegram), sekarang
+ada mode **otonom**: bot analisa XAUUSD sendiri tiap 10 menit (fitur
+"Auto-Signal" yang sudah ada) DAN eksekusi ke MT5 sendiri kalau hasilnya
+BUY/SELL — tanpa kamu perlu klik apa pun.
+
+**Saklar utama WAJIB dinyalakan manual** — set env var `MT5_AUTONOMOUS_XAUUSD=true`
+di Cloudflare (Settings → Variables and Secrets). Kalau tidak diisi/bukan
+persis "true", mode otonom TIDAK PERNAH eksekusi ke MT5 (siklus auto tetap
+jalan kirim sinyal teks doang, seperti sebelumnya).
+
+3 lapis kontrol risiko yang otomatis aktif begitu saklar utama dinyalakan:
+1. **Maksimal 1 posisi terbuka** dalam satu waktu (khusus XAUUSD/bot ini) — sinyal baru ditolak selama masih ada posisi terbuka
+2. **Limit trade per hari** — default 5, atur lewat `MT5_MAX_TRADES_PER_DAY`
+3. **Circuit breaker rugi harian** — default 3% dari equity awal hari, atur lewat `MT5_MAX_DAILY_LOSS_PCT`. Kalau tersentuh, mode otonom berhenti eksekusi sampai hari berikutnya (UTC)
+
+Semua kontrol ini butuh `mt5_bridge.py` versi terbaru (ada fungsi
+`report_account_status()` yang lapor balance/equity/posisi tiap siklus
+push). Kalau bridge belum lapor status sama sekali (misal baru start),
+mode otonom otomatis menolak eksekusi sampai ada laporan status pertama.
+
+Trading kripto (BTCUSDT dll) TIDAK terpengaruh fitur ini — mode otonom
+cuma berlaku untuk XAUUSD/MT5.
+
 ## Roadmap berikutnya
 - [ ] Pindahkan MT5 bridge dari laptop ke VPS supaya jalan 24 jam
 - [ ] Position sizing berbasis % risiko akun (bukan lot fixed)
