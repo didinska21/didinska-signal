@@ -53,6 +53,20 @@ async function handleMt5BridgeRequest(request, env, pathname) {
     return new Response(await res.text(), { status: res.status, headers: { "Content-Type": "application/json" } });
   }
 
+  // --- Bridge lapor status akun (balance/equity/posisi terbuka), dipakai
+  // buat kontrol risiko mode otonom: POST /mt5-bridge/status ---
+  if (pathname === "/mt5-bridge/status" && request.method === "POST") {
+    const body = await request.json();
+    const { symbol, balance, equity, openPositionTicket } = body;
+    if (!symbol) return Response.json({ ok: false, error: "symbol wajib diisi" }, { status: 400 });
+    const stub = getMt5Stub(env, symbol);
+    const res = await stub.fetch("https://mt5-bridge/reportStatus", {
+      method: "POST",
+      body: JSON.stringify({ balance, equity, openPositionTicket }),
+    });
+    return new Response(await res.text(), { status: res.status, headers: { "Content-Type": "application/json" } });
+  }
+
   // --- Bridge lapor hasil eksekusi: POST /mt5-bridge/execution ---
   if (pathname === "/mt5-bridge/execution" && request.method === "POST") {
     const body = await request.json();

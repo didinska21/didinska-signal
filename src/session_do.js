@@ -20,7 +20,7 @@ import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
 import { buildMarketDataPackage } from "./marketData.js";
 import { fetchCurrentPrice, isMt5Symbol } from "./marketSource.js";
 import { buildSignalChartImage } from "./ChartImage.js";
-import { enqueueMt5Execution } from "./mt5Exec.js";
+import { enqueueMt5Execution, checkMt5AutonomousGuardrails } from "./mt5Exec.js";
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
@@ -30,6 +30,16 @@ const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses sat
 // env var MT5_DEFAULT_LOT. Ini SENGAJA fixed-lot sederhana (bukan position
 // sizing berbasis % risiko akun) — cukup untuk tahap demo/testing awal.
 const DEFAULT_MT5_LOT = 0.01;
+
+// --- Kontrol risiko mode OTONOM (khusus XAUUSD, siklus auto-signal tanpa
+// pengawasan manual) ---
+// Saklar utama: HARUS "true" secara eksplisit di env var, kalau tidak
+// di-set sama sekali (atau apa pun selain "true"), siklus auto TIDAK AKAN
+// PERNAH eksekusi ke MT5 — cuma kirim sinyal teks seperti sebelumnya. Ini
+// supaya trading otonom beneran tidak nyala tanpa sengaja/tanpa sadar.
+const AUTONOMOUS_XAUUSD_ENABLED = (env) => env.MT5_AUTONOMOUS_XAUUSD === "true";
+const DEFAULT_MAX_TRADES_PER_DAY = 5;
+const DEFAULT_MAX_DAILY_LOSS_PCT = 3;
 
 export class SessionDO {
   constructor(state, env) {
@@ -314,36 +324,73 @@ export class SessionDO {
         resultKeyboard = signalResultKeyboard(signalId);
 
         // --- Eksekusi otomatis ke MT5 (khusus simbol yang datanya dari MT5
-        // bridge, misal XAUUSD) — antre sinyal buat diambil & dieksekusi
-        // bridge Python di laptop/VPS kamu.
-        if (isMt5Symbol(symbol) && !job.isAuto) {
-          // Guard 1: SL/TP/Entry gagal ke-parse (null) — JANGAN antre
-          // eksekusi, lebih aman diam & kasih tahu user, daripada bridge
-          // eksekusi order tanpa SL/TP yang jelas.
-          if (entryPrice == null || slPrice == null || tpPrice == null) {
+        // bridge, yaitu XAUUSD) — antre sinyal buat diambil & dieksekusi
+        // bridge Python di laptop/VPS kamu. Dua jalur:
+        //   (a) Manual (!job.isAuto) — user sendiri yang klik tombol
+        //       Signal Trade di Telegram, jadi user sudah "mengawasi" saat
+        //       itu. Guard yang berlaku: parsing SL/TP/Entry valid, & logika
+        //       BUY/SELL masuk akal.
+        //   (b) Otonom (job.isAuto) — sinyal dari siklus auto 10 menit,
+        //       TANPA pengawasan user saat itu juga. Guard (a) tetap
+        //       berlaku, DITAMBAH 3 lapis kontrol risiko (1 posisi
+        //       terbuka, limit trade/hari, circuit breaker rugi harian),
+        //       dan SEMUA itu hanya jalan kalau saklar MT5_AUTONOMOUS_XAUUSD
+        //       di env di-set eksplisit ke "true".
+        if (isMt5Symbol(symbol) && (!job.isAuto || AUTONOMOUS_XAUUSD_ENABLED(this.env))) {
+          const invalidReason =
+            entryPrice == null || slPrice == null || tpPrice == null
+              ? "Entry/SL/TP gagal terbaca lengkap dari teks AI Penyimpul"
+              : (decision === "BUY" && !(tpPrice > entryPrice && entryPrice > slPrice)) ||
+                (decision === "SELL" && !(tpPrice < entryPrice && entryPrice < slPrice))
+              ? `susunan Entry ${entryPrice} / SL ${slPrice} / TP ${tpPrice} tidak logis (untuk ${decision}, seharusnya ${
+                  decision === "BUY" ? "TP > Entry > SL" : "TP < Entry < SL"
+                })`
+              : null;
+
+          if (invalidReason) {
             await sendMessage(
               this.env,
               chatId,
-              `⚠️ Sinyal ${decision} muncul tapi Entry/SL/TP gagal terbaca lengkap dari teks AI Penyimpul — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan. Silakan cek manual teks sinyal di atas.`
+              `⚠️ Sinyal ${decision}${job.isAuto ? " (Auto-Signal)" : ""}: ${invalidReason} — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan.`
             );
-          }
-          // Guard 2: susunan Entry/SL/TP harus logis. BUY: TP > Entry > SL.
-          // SELL: TP < Entry < SL. Kalau kebalik/aneh (misalnya AI keliru
-          // menganalisa data candle yang beku saat pasar tutup), sinyal ini
-          // TIDAK BOLEH dieksekusi otomatis — order jadi tidak masuk akal
-          // (contoh nyata yang pernah kejadian: BUY dengan TP di BAWAH SL).
-          else if (
-            (decision === "BUY" && !(tpPrice > entryPrice && entryPrice > slPrice)) ||
-            (decision === "SELL" && !(tpPrice < entryPrice && entryPrice < slPrice))
-          ) {
-            await sendMessage(
-              this.env,
-              chatId,
-              `⚠️ Sinyal ${decision} dengan Entry ${entryPrice} / SL ${slPrice} / TP ${tpPrice} susunannya TIDAK LOGIS (untuk ${decision}, seharusnya ${
-                decision === "BUY" ? "TP > Entry > SL" : "TP < Entry < SL"
-              }) — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan. Kemungkinan penyebab: AI menganalisa data candle yang sudah tidak update (misal saat pasar tutup). Cek manual teks sinyal di atas sebelum entry sendiri.`
-            );
+          } else if (job.isAuto) {
+            // Jalur otonom: cek 3 kontrol risiko dulu sebelum enqueue.
+            const guard = await checkMt5AutonomousGuardrails(this.env, symbol, {
+              maxTradesPerDay: Number(this.env.MT5_MAX_TRADES_PER_DAY) || DEFAULT_MAX_TRADES_PER_DAY,
+              maxDailyLossPct: Number(this.env.MT5_MAX_DAILY_LOSS_PCT) || DEFAULT_MAX_DAILY_LOSS_PCT,
+            });
+
+            if (!guard.allowed) {
+              await sendMessage(
+                this.env,
+                chatId,
+                `🤖⛔ Sinyal ${decision} (Auto-Signal) TIDAK dieksekusi ke MT5: ${escapeHtml(guard.reason)}`
+              );
+            } else {
+              try {
+                const lot = Number(this.env.MT5_DEFAULT_LOT) || DEFAULT_MT5_LOT;
+                await enqueueMt5Execution(this.env, symbol, {
+                  signalId,
+                  chatId,
+                  decision,
+                  entry: entryPrice,
+                  sl: slPrice,
+                  tp: tpPrice,
+                  lot,
+                });
+                await sendMessage(
+                  this.env,
+                  chatId,
+                  `🤖🔗 Sinyal ${decision} (Auto-Signal) sudah diantre ke MT5 bridge (lot ${lot}).`
+                );
+              } catch (err) {
+                console.error("Gagal antre eksekusi MT5 (auto):", err);
+                await sendMessage(this.env, chatId, `⚠️ Auto-Signal gagal antre eksekusi MT5: ${escapeHtml(err.message)}`);
+              }
+            }
           } else {
+            // Jalur manual: user sendiri yang minta, tidak perlu guardrail
+            // risiko harian (itu khusus buat siklus tanpa pengawasan).
             try {
               const lot = Number(this.env.MT5_DEFAULT_LOT) || DEFAULT_MT5_LOT;
               await enqueueMt5Execution(this.env, symbol, {

@@ -29,6 +29,81 @@ export class Mt5BridgeDO {
 
     switch (action) {
       // --- Bridge push candle terbaru ---
+      // --- Bridge lapor status akun (balance/equity) & posisi terbuka,
+      // dipanggil bridge tiap siklus push candle. Dipakai buat 3 lapis
+      // kontrol risiko mode otonom: (1) 1 posisi terbuka dalam satu waktu,
+      // (2) limit trade per hari, (3) circuit breaker rugi harian.
+      case "reportStatus": {
+        const { balance, equity, openPositionTicket } = await request.json();
+        const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+
+        let risk = (await this.storage.get("riskState")) || null;
+        if (!risk || risk.date !== today) {
+          // Hari baru (atau belum pernah ada) -> reset snapshot ekuitas awal
+          // hari ini & counter trade harian.
+          risk = { date: today, dayStartEquity: equity, tradesToday: 0 };
+        }
+        risk.lastBalance = balance;
+        risk.lastEquity = equity;
+        risk.openPositionTicket = openPositionTicket ?? null;
+        risk.updatedAt = Date.now();
+        await this.storage.put("riskState", risk);
+        return Response.json({ ok: true, risk });
+      }
+
+      // --- Worker (session_do.js, khusus siklus AUTO XAUUSD) cek apakah
+      // boleh eksekusi trade baru, berdasarkan 3 kontrol risiko di atas.
+      // Endpoint ini TIDAK dipakai buat sinyal manual (yang diklik user
+      // sendiri dari Telegram) — cuma buat siklus otomatis tanpa pengawasan.
+      case "checkAutonomousGuardrails": {
+        const { maxTradesPerDay, maxDailyLossPct } = await request.json();
+        const risk = await this.storage.get("riskState");
+
+        if (!risk) {
+          return Response.json({
+            allowed: false,
+            reason: "Belum ada laporan status akun (balance/equity/posisi) dari MT5 bridge. Tunggu beberapa siklus push dulu.",
+          });
+        }
+
+        const age = Date.now() - risk.updatedAt;
+        if (age > 5 * 60 * 1000) {
+          return Response.json({
+            allowed: false,
+            reason: `Status akun dari bridge sudah basi (${Math.round(age / 1000)}s lalu). Cek koneksi bridge Python.`,
+          });
+        }
+
+        if (risk.openPositionTicket) {
+          return Response.json({
+            allowed: false,
+            reason: `Masih ada posisi terbuka (ticket ${risk.openPositionTicket}). Mode otonom hanya boleh 1 posisi dalam satu waktu.`,
+          });
+        }
+
+        if (risk.tradesToday >= maxTradesPerDay) {
+          return Response.json({
+            allowed: false,
+            reason: `Limit trade harian tercapai (${risk.tradesToday}/${maxTradesPerDay}). Coba lagi besok.`,
+          });
+        }
+
+        const lossPct = ((risk.dayStartEquity - risk.lastEquity) / risk.dayStartEquity) * 100;
+        if (lossPct >= maxDailyLossPct) {
+          return Response.json({
+            allowed: false,
+            reason: `Circuit breaker rugi harian aktif (rugi ${lossPct.toFixed(2)}% dari batas ${maxDailyLossPct}%). Trading otomatis dihentikan sampai hari berikutnya.`,
+          });
+        }
+
+        // Lolos semua guardrail -> catat sebagai 1 trade hari ini SEKARANG
+        // (bukan setelah eksekusi sukses), supaya tidak ada celah race
+        // condition kalau 2 siklus auto kebetulan jalan hampir bersamaan.
+        risk.tradesToday += 1;
+        await this.storage.put("riskState", risk);
+        return Response.json({ allowed: true });
+      }
+
       case "pushCandles": {
         const { interval, candles } = await request.json();
         if (!interval || !Array.isArray(candles) || candles.length === 0) {
