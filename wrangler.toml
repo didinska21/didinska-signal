@@ -2,6 +2,24 @@ name = "didinska-signal"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
+# --- Variable non-rahasia (BUKAN secret/password/API key) ---
+# Ditaruh LANGSUNG di sini (bukan lewat dashboard Cloudflare) supaya
+# NGGAK PERNAH HILANG lagi tiap kali GitHub push memicu deploy ulang —
+# ini penyebab MT5_BRIDGE_SECRET & MT5_AUTONOMOUS_XAUUSD sempat "hilang"
+# kemarin: variable yang di-set manual lewat dashboard TIDAK DIJAMIN
+# selalu bertahan lintas deploy, sedangkan yang ditulis di sini SELALU
+# ikut ke-deploy karena jadi bagian dari kode yang di-commit ke GitHub.
+#
+# Untuk mengaktifkan mode OTONOM XAUUSD: ubah baris di bawah jadi "true",
+# commit, push. JANGAN ubah lewat dashboard lagi, biar tidak "hilang" lagi.
+[vars]
+MT5_AUTONOMOUS_XAUUSD = "false"
+MT5_MAX_TRADES_PER_DAY = "5"
+MT5_MAX_DAILY_LOSS_PCT = "10"
+MT5_DEFAULT_LOT = "0.01"
+GROQ_TEXT_MODEL = "openai/gpt-oss-120b"
+GROQ_SUMMARY_MODEL = "openai/gpt-oss-120b"
+
 # Cron dinonaktifkan — bot sekarang berbasis webhook (interaktif via menu),
 # bukan push notifikasi otomatis.
 # [triggers]
