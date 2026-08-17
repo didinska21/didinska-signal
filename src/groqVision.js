@@ -65,7 +65,8 @@ WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" at
     {
       model,
       temperature: 0.6,
-      max_tokens: 400,
+      max_tokens: 800,
+      reasoning_effort: "low", // sama alasannya dengan groqText.js: jaga-jaga kalau model vision-nya juga model reasoning
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content },
