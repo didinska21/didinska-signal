@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractPriceAfterLabel, detectDecision, tallyBias } from "../src/session_do.js";
+import { extractPriceAfterLabel, detectDecision, tallyBias, computePillarAlignment } from "../src/session_do.js";
 
 // Teks ini persis dari kasus nyata yang dilaporkan (screenshot BTC/USDT SELL) —
 // sebelum perbaikan, SL & TP ke-extract sebagai angka "poin" (79.5 / 159),
@@ -166,4 +166,65 @@ test("tallyBias: bias per-AI dengan markdown bold '**Bias:** Bearish' tetap terh
 test("tallyBias: opinion tanpa baris Bias sama sekali -> dihitung netral (fallback aman)", () => {
   const tally = tallyBias([{ opinion: "Tidak ada baris bias di sini." }]);
   assert.deepEqual(tally, { bullish: 0, bearish: 0, netral: 1 });
+});
+
+// --- Strategi "Konfluensi 3 Pilar" ---
+function opinion(number, title, bias) {
+  return { label: `AI ${number} (${title})`, opinion: `Analisa singkat.\nBias: ${bias}` };
+}
+
+test("computePillarAlignment: mode cepat, 3 pilar (1,2,5) searah Bullish -> alignedCount 3", () => {
+  const opinions = [
+    opinion(1, "Trend", "Bullish"),
+    opinion(2, "Momentum", "Bullish"),
+    opinion(3, "Volatilitas", "Netral"),
+    opinion(5, "Support & Resistance", "Bullish"),
+    opinion(10, "Risk Management", "Netral"),
+  ];
+  const result = computePillarAlignment(opinions, "cepat");
+  assert.equal(result.alignedCount, 3);
+  assert.equal(result.dominant, "Bullish");
+  assert.deepEqual(result.pillars, { trend: "Bullish", level: "Bullish", momentum: "Bullish" });
+});
+
+test("computePillarAlignment: mode cepat, cuma 2 dari 3 pilar searah -> alignedCount 2", () => {
+  const opinions = [
+    opinion(1, "Trend", "Bullish"),
+    opinion(2, "Momentum", "Bearish"),
+    opinion(5, "Support & Resistance", "Bullish"),
+  ];
+  const result = computePillarAlignment(opinions, "cepat");
+  assert.equal(result.alignedCount, 2);
+  assert.equal(result.dominant, "Bullish");
+});
+
+test("computePillarAlignment: mode lengkap, pilar Level Kunci (AI 5+6) seri -> dihitung Netral", () => {
+  const opinions = [
+    opinion(1, "Trend", "Bullish"),
+    opinion(2, "Momentum", "Bullish"),
+    opinion(5, "Support & Resistance", "Bullish"),
+    opinion(6, "SMC", "Bearish"), // seri dengan #5 -> pilar Level Kunci jadi Netral
+    opinion(7, "Price Action", "Bullish"),
+  ];
+  const result = computePillarAlignment(opinions, "lengkap");
+  assert.equal(result.pillars.level, "Netral");
+  // Trend (Bullish) & Momentum (Bullish, dari mayoritas AI 2+7) tetap searah -> alignedCount 2
+  assert.equal(result.pillars.momentum, "Bullish");
+  assert.equal(result.alignedCount, 2);
+  assert.equal(result.dominant, "Bullish");
+});
+
+test("computePillarAlignment: tidak ada dominasi arah (semua Netral) -> alignedCount 0", () => {
+  const opinions = [
+    opinion(1, "Trend", "Netral"),
+    opinion(2, "Momentum", "Netral"),
+    opinion(5, "Support & Resistance", "Netral"),
+  ];
+  const result = computePillarAlignment(opinions, "cepat");
+  assert.equal(result.alignedCount, 0);
+  assert.equal(result.dominant, "Netral");
+});
+
+test("computePillarAlignment: aiMode 'fiboqm' -> null (punya logika bobot sendiri)", () => {
+  assert.equal(computePillarAlignment([], "fiboqm"), null);
 });
