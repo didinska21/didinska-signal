@@ -87,6 +87,12 @@ WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" at
  * @param {string} [aiMode] - "cepat" | "lengkap" | "fiboqm". Kalau "fiboqm",
  *   prompt diberi instruksi bobot penimbangan KHUSUS (2 AI Fibo & QM jadi
  *   pertimbangan utama, sisanya cuma konfirmasi) — lihat FIBO_QM_WEIGHT_NOTE.
+ *   Kalau "cepat"/"lengkap", dipakai strategi "Konfluensi 3 Pilar" — lihat
+ *   PILLAR_WEIGHT_NOTE & @param pillarAlignment.
+ * @param {object} [pillarAlignment] - hasil computePillarAlignment() dari
+ *   session_do.js: { alignedCount, dominant, pillars: {trend, level, momentum} }.
+ *   Dihitung SISTEM (bukan ditebak AI Penyimpul) supaya keselarasan 3 pilar
+ *   konsisten & tidak bisa "diakali" gaya tulis AI.
  */
 const FIBO_QM_WEIGHT_NOTE = `
 
@@ -95,7 +101,41 @@ Dari ${"{OPINION_COUNT}"} opini di atas, opini AI 1 (Spesialis Fibonacci Retrace
 Opini AI 3-6 (Trend/Momentum/Volume/Risk Management) HANYA KONFIRMASI/PENDUKUNG — JANGAN samakan bobotnya dengan AI 1 & 2 walau tally bias di atas menghitung semuanya rata. Kalau AI 3-6 mayoritas BERTENTANGAN kuat dengan bias AI 1/2, sebutkan itu sebagai PERINGATAN RISIKO di jawaban Anda (bukan otomatis membalik keputusan).
 📍 Level Kunci WAJIB mencantumkan level Fibonacci relevan (dengan rasio & angka harga, misal "Fibo 0.618 di 64109") dan level QM/neckline (kalau ada polanya, dengan angka harga) — bukan cuma support/resistance historis biasa.`;
 
-export async function summarizeSignals(env, opinions, tradeMode, symbol, biasTally, aiMode) {
+/**
+ * Bangun catatan strategi "Konfluensi 3 Pilar" untuk mode "cepat"/"lengkap",
+ * berdasarkan hasil computePillarAlignment() yang SUDAH DIHITUNG SISTEM
+ * (bukan ditebak ulang oleh AI Penyimpul) — supaya konsisten.
+ */
+function buildPillarWeightNote(pillarAlignment) {
+  if (!pillarAlignment) return "";
+  const { alignedCount, dominant, pillars } = pillarAlignment;
+  const pillarLines = [
+    `- Trend (Pilar 1): ${pillars.trend}`,
+    `- Level Kunci (Pilar 2): ${pillars.level}`,
+    `- Momentum (Pilar 3): ${pillars.momentum}`,
+  ].join("\n");
+
+  let instruction;
+  if (alignedCount >= 3) {
+    instruction = `Ke-3 pilar SEARAH (${dominant}) — ini sinyal KUAT. Keputusan Anda SEBAIKNYA ${
+      dominant === "Bullish" ? "BUY" : dominant === "Bearish" ? "SELL" : "sesuai arah mayoritas"
+    } (kecuali ada alasan kuat dari AI penunjang untuk menahan), dan Probabilitas boleh di kisaran LEBIH TINGGI (≈65-80%).`;
+  } else if (alignedCount === 2) {
+    instruction = `Cuma 2 dari 3 pilar SEARAH (kecenderungan ${dominant}) — sinyal BOLEH tetap dikeluarkan (BUY/SELL), TAPI WAJIB cantumkan 1 kalimat PERINGATAN RISIKO eksplisit yang menyebut pilar mana yang belum sejalan, dan Probabilitas WAJIB moderat saja (≈45-60%, JANGAN di atas 60%).`;
+  } else {
+    instruction = `Pilar TIDAK cukup selaras (cuma ${alignedCount} dari 3 pilar searah, atau tidak ada dominasi arah yang jelas) — dalam kondisi ini Keputusan WAJIB "WAIT", KECUALI Anda punya alasan sangat kuat & eksplisit dari data lain untuk tetap entry (harus dijelaskan alasannya, dan Probabilitas WAJIB rendah, ≤40%).`;
+  }
+
+  return `
+
+CATATAN STRATEGI "KONFLUENSI 3 PILAR" — DIHITUNG OTOMATIS OLEH SISTEM (bukan tugas Anda menghitung ulang):
+${pillarLines}
+Jumlah pilar yang searah: ${alignedCount}/3.
+${instruction}
+Sebutkan status keselarasan 3 pilar ini secara singkat di bagian 📊 Bias Arah atau 📍 Level Kunci (misal: "3 pilar searah Bullish" / "2 dari 3 pilar searah, Momentum belum konfirmasi").`;
+}
+
+export async function summarizeSignals(env, opinions, tradeMode, symbol, biasTally, aiMode, pillarAlignment) {
   const apiKey = env.GROQ_SUMMARIZER_API_KEY || env.GROQ_API_KEY;
   const model = env.GROQ_SUMMARY_MODEL || DEFAULT_SUMMARY_MODEL;
 
@@ -104,6 +144,7 @@ export async function summarizeSignals(env, opinions, tradeMode, symbol, biasTal
     : null;
 
   const isFiboQm = aiMode === "fiboqm";
+  const isPillarMode = aiMode === "cepat" || aiMode === "lengkap";
 
   const systemPrompt = `Anda adalah analis teknikal dan ahli perdagangan futures profesional yang bertugas SEBAGAI HAKIM/PENYIMPUL.
 Anda menerima TEPAT ${opinions.length} opini dari AI spesialis lain${isFiboQm ? ", fokus mode analisis \"Fibo & QM\" (Fibonacci Retracement & pola Quasimodo sebagai pertimbangan utama, sisanya konfirmasi)" : ", masing-masing fokus di dimensi berbeda (trend, momentum, volatilitas, volume, support/resistance, smart money concept, price action, multi-timeframe, konteks makro, risk management)"}. Bisa jadi ada yang berbeda pendapat.
@@ -124,7 +165,13 @@ Format WAJIB jawaban (gunakan struktur ini persis):
 - Take-Profit: (format sama: HARGA ABSOLUT dulu, penjelasan setelahnya — misal "Take-Profit: 62600 (rasio Risk:Reward ≈1:2)")
 📈 Probabilitas: (HANYA tulis perkiraan persentase keyakinan, misal "±65%" — JANGAN tulis rincian jumlah AI di baris ini, itu akan ditambahkan otomatis oleh sistem)
 
-Akhiri dengan satu kalimat: sebutkan ini hasil gabungan ${opinions.length} AI spesialis, berdasarkan probabilitas matematis, dan risiko sepenuhnya ditanggung trader.${isFiboQm ? FIBO_QM_WEIGHT_NOTE.replace("{OPINION_COUNT}", String(opinions.length)) : ""}`;
+Akhiri dengan satu kalimat: sebutkan ini hasil gabungan ${opinions.length} AI spesialis, berdasarkan probabilitas matematis, dan risiko sepenuhnya ditanggung trader.${
+    isFiboQm
+      ? FIBO_QM_WEIGHT_NOTE.replace("{OPINION_COUNT}", String(opinions.length))
+      : isPillarMode
+      ? buildPillarWeightNote(pillarAlignment)
+      : ""
+  }`;
 
   const opinionsText = opinions.map((op) => `${op.label}:\n${op.opinion}`).join("\n\n");
 

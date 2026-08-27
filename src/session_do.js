@@ -13,7 +13,7 @@
 import { sendMessage, sendPhoto, editMessageText } from "./telegram.js";
 import { analyzeChartImages, summarizeSignals } from "./groqVision.js";
 import { analyzeWithGroqText } from "./groqText.js";
-import { getAnalystsForMode } from "./analysts.js";
+import { getAnalystsForMode, PILLAR_MAP } from "./analysts.js";
 import { mainMenuKeyboard, signalResultKeyboard } from "./menus.js";
 import { escapeHtml, formatTelegramHtml } from "./htmlUtil.js";
 import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
@@ -283,7 +283,8 @@ export class SessionDO {
       );
 
       const biasTally = tallyBias(opinions);
-      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally, aiMode);
+      const pillarAlignment = computePillarAlignment(opinions, aiMode);
+      const finalSignal = await summarizeSignals(this.env, opinions, tradeMode, symbol, biasTally, aiMode, pillarAlignment);
       const finalSignalFixed = enforceBiasTally(finalSignal, biasTally, opinions.length);
       const decision = detectDecision(finalSignalFixed);
 
@@ -420,7 +421,19 @@ export class SessionDO {
       }
 
 
-      await safeEdit(this.env, chatId, messageId, formatTelegramHtml(finalSignalFixed), resultKeyboard);
+      const codeBlock = buildSignalCodeBlock({
+        symbol,
+        decision,
+        entryPrice,
+        slPrice,
+        tpPrice,
+        pillarAlignment,
+      });
+      const finalMessageText = codeBlock
+        ? `${codeBlock}\n${formatTelegramHtml(finalSignalFixed)}`
+        : formatTelegramHtml(finalSignalFixed);
+
+      await safeEdit(this.env, chatId, messageId, finalMessageText, resultKeyboard);
 
       if (!job.isAuto && decision && decision !== "WAIT") {
         try {
@@ -707,6 +720,103 @@ export function tallyBias(opinions) {
     else tally.netral++;
   }
   return tally;
+}
+
+/**
+ * Hitung keselarasan strategi "Konfluensi 3 Pilar" dari opini yang sudah
+ * masuk, berdasarkan PILLAR_MAP di analysts.js (siapa AI nomor berapa jadi
+ * pilar apa, per mode). SENGAJA dihitung di sini (kode biasa, bukan AI) —
+ * supaya keselarasan pilar konsisten & tidak tergantung gaya tulis AI
+ * Penyimpul. Kalau aiMode bukan "cepat"/"lengkap" (misal "fiboqm"), return
+ * null (mode itu punya logika bobot sendiri, lihat FIBO_QM_WEIGHT_NOTE).
+ */
+export function computePillarAlignment(opinions, aiMode) {
+  const map = PILLAR_MAP[aiMode];
+  if (!map) return null;
+
+  // opinions[i].label formatnya "AI <nomor> (<judul>)" — ambil nomornya.
+  const biasByNumber = new Map();
+  for (const op of opinions) {
+    const numMatch = /^AI (\d+)/.exec(op.label || "");
+    if (!numMatch) continue;
+    const plainOpinion = (op.opinion || "").replace(/\*/g, "");
+    const match = BIAS_LINE_RE.exec(plainOpinion);
+    biasByNumber.set(Number(numMatch[1]), match ? match[1] : "Netral");
+  }
+
+  // Untuk tiap pilar (bisa terdiri dari >1 AI, misal Level Kunci di mode
+  // Lengkap = AI #5 + #6): ambil bias MAYORITAS anggotanya. Kalau seri
+  // (1 Bullish, 1 Bearish) -> pilar itu dianggap "Netral" (belum jelas).
+  function pillarBias(numbers) {
+    const biases = numbers.map((n) => biasByNumber.get(n)).filter(Boolean);
+    if (biases.length === 0) return "Netral";
+    const count = { Bullish: 0, Bearish: 0, Netral: 0 };
+    for (const b of biases) count[b] = (count[b] || 0) + 1;
+    if (count.Bullish > count.Bearish) return "Bullish";
+    if (count.Bearish > count.Bullish) return "Bearish";
+    return "Netral";
+  }
+
+  const pillars = {
+    trend: pillarBias(map.trend),
+    level: pillarBias(map.level),
+    momentum: pillarBias(map.momentum),
+  };
+
+  const values = Object.values(pillars);
+  const bullishCount = values.filter((v) => v === "Bullish").length;
+  const bearishCount = values.filter((v) => v === "Bearish").length;
+
+  let dominant = "Netral";
+  let alignedCount = 0;
+  if (bullishCount > bearishCount) {
+    dominant = "Bullish";
+    alignedCount = bullishCount;
+  } else if (bearishCount > bullishCount) {
+    dominant = "Bearish";
+    alignedCount = bearishCount;
+  } else {
+    // Seri (termasuk 0-0-0 semua Netral) -> tidak ada dominasi arah jelas.
+    alignedCount = 0;
+  }
+
+  return { alignedCount, dominant, pillars };
+}
+
+/**
+ * Bangun block ringkasan sinyal ala "kode/terminal" (font monospace via
+ * <pre>) untuk ditempel di ATAS teks penjelasan AI Penyimpul — Telegram
+ * TIDAK mendukung syntax-highlight berwarna (baik di HP maupun sebagian
+ * besar klien desktop), jadi "warna" di sini diwakili emoji + box border,
+ * bukan warna asli. Dibangun dari angka yang SUDAH DIPARSING sistem
+ * (entryPrice/slPrice/tpPrice), bukan dari teks bebas AI — supaya
+ * formatnya selalu rapi & konsisten walau gaya tulis AI berubah-ubah.
+ */
+function buildSignalCodeBlock({ symbol, decision, entryPrice, slPrice, tpPrice, pillarAlignment }) {
+  if (!decision) return null;
+
+  const decisionEmoji = decision === "BUY" ? "🟢" : decision === "SELL" ? "🔴" : "🟡";
+  const lines = [`${decisionEmoji} ${symbol}  —  ${decision}`, "─────────────────────"];
+
+  if (entryPrice != null) lines.push(`Entry : ${entryPrice}`);
+  if (slPrice != null) lines.push(`SL    : ${slPrice}  🔴`);
+  if (tpPrice != null) lines.push(`TP    : ${tpPrice}  🟢`);
+
+  if (entryPrice != null && slPrice != null && tpPrice != null) {
+    const risk = Math.abs(entryPrice - slPrice);
+    const reward = Math.abs(tpPrice - entryPrice);
+    if (risk > 0) {
+      const rr = (reward / risk).toFixed(2);
+      lines.push(`R:R   : 1 : ${rr}`);
+    }
+  }
+
+  if (pillarAlignment) {
+    lines.push("─────────────────────");
+    lines.push(`Pilar searah : ${pillarAlignment.alignedCount}/3 (${pillarAlignment.dominant})`);
+  }
+
+  return `<pre>${escapeHtml(lines.join("\n"))}</pre>`;
 }
 
 function enforceBiasTally(text, tally, total) {

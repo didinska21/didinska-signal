@@ -1,9 +1,16 @@
 /**
  * Definisi 10 AI spesialis + AI Penyimpul (AI ke-11, ada di groqVision.js).
  *
- * Tiap spesialis fokus pada 1 dimensi analisis (bukan analisis umum yang
- * tumpang tindih), sesuai pembagian: Trend & Momentum, Volume & Level Kunci,
- * Pola & Konteks Lanjutan, dan Eksekusi (risk management).
+ * STRATEGI: "Konfluensi 3 Pilar" — sinyal BUY/SELL yang kuat butuh 3 hal
+ * SEARAH sekaligus:
+ *   PILAR 1 — TREND        : arah besar pasar (AI #1)
+ *   PILAR 2 — LEVEL KUNCI   : harga sedang di zona reaksi (AI #5, +AI #6 di mode Lengkap)
+ *   PILAR 3 — MOMENTUM      : konfirmasi entry (AI #2, +AI #7 di mode Lengkap)
+ * AI lain (Volatilitas, Volume, MTF, Makro, Risk Management) berperan
+ * PENUNJANG/VALIDATOR — tidak menentukan arah, tapi dipakai AI Penyimpul
+ * untuk menambah/mengurangi keyakinan & memberi peringatan risiko.
+ * Logika pembobotan akhir ada di session_do.js (computePillarAlignment)
+ * dan groqVision.js (PILLAR_WEIGHT_NOTE).
  *
  * `quick: true` = termasuk dalam mode "Cepat" (5 AI, murni data API).
  * Mode "Lengkap" menjalankan seluruh 10 AI. Semua AI di sini berbasis data
@@ -11,13 +18,28 @@
  * user (AI 7 dulu butuh foto, sekarang diganti analisa OHLC mentah).
  */
 
-function baseHeader(title, symbol, tradeMode) {
+const PILLAR_LABELS = {
+  trend: "PILAR 1 — TREND (arah besar pasar)",
+  level: "PILAR 2 — LEVEL KUNCI (zona reaksi harga)",
+  momentum: "PILAR 3 — MOMENTUM / KONFIRMASI ENTRY",
+  supporting: "PENUNJANG / VALIDATOR",
+};
+
+function pillarRoleNote(pillar) {
+  if (pillar === "supporting") {
+    return `PERAN ANDA: ${PILLAR_LABELS.supporting} dalam strategi "Konfluensi 3 Pilar". Opini Anda TIDAK menentukan arah sinyal utama — tugas Anda MENDUKUNG atau MEMBERI PERINGATAN terhadap 3 pilar utama (Trend, Level Kunci, Momentum). Jangan berperilaku seolah opini Anda setara bobotnya dengan AI pilar utama.`;
+  }
+  return `PERAN ANDA: pemegang ${PILLAR_LABELS[pillar]}, salah satu dari 3 PILAR UTAMA strategi "Konfluensi 3 Pilar". Bias arah Anda IKUT MENENTUKAN keputusan akhir secara langsung — sistem akan mengecek apakah ke-3 pilar (Trend, Level Kunci, Momentum) SEARAH sebelum memutuskan sinyal kuat atau WAIT. Jangan ragu-ragu di baris "Bias:" — beri kesimpulan tegas berdasar data.`;
+}
+
+function baseHeader(title, symbol, tradeMode, pillar) {
   return `Anda adalah AI spesialis trading futures dengan peran: ${title}.
+${pillarRoleNote(pillar)}
 Simbol: ${symbol}. Mode trading: ${tradeMode}.
 Analisa HANYA dari data JSON yang diberikan (jangan menebak di luar data itu).
 Beri opini SINGKAT (maksimal 5 kalimat): kesimpulan dari sudut pandang Anda, dan bias arah (Bullish/Bearish/Netral).
 Bahasa Indonesia, langsung ke inti, tanpa basa-basi.
-WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" atau "Bias: Bearish" atau "Bias: Netral" (pilih satu, tanpa tambahan kata lain di baris itu — ini dipakai sistem untuk menghitung tally otomatis).`;
+WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" atau "Bias: Bearish" atau "Bias: Netral" (pilih satu, tanpa tambahan kata lain di baris itu — ini dipakai sistem untuk menghitung tally & keselarasan pilar otomatis).`;
 }
 
 // Simbol yang datanya dari MT5 (lihat marketSource.js) — dipakai analyst
@@ -26,6 +48,28 @@ WAJIB akhiri jawaban Anda dengan baris baru PERSIS berformat: "Bias: Bullish" at
 // Index) itu KHUSUS kripto, tidak relevan buat Gold/instrumen lain.
 const MT5_SYMBOLS = new Set(["XAUUSD"]);
 
+// Peta AI number -> pilar, PER MODE (komposisi AI beda antara Cepat & Lengkap:
+// mode Cepat cuma punya AI #1/#5/#6 dst yang termasuk quick:true, jadi tidak
+// semua anggota pilar tersedia di sana). Dipakai oleh session_do.js
+// (computePillarAlignment) & groqVision.js (buildPillarWeightNote) supaya
+// definisi "siapa pilar apa" hanya ada di SATU tempat (di sini).
+export const PILLAR_MAP = {
+  cepat: {
+    trend: [1],
+    level: [5],
+    momentum: [2],
+  },
+  lengkap: {
+    trend: [1],
+    level: [5, 6],
+    momentum: [2, 7],
+  },
+};
+
+export function getPillarLabel(pillarKey) {
+  return PILLAR_LABELS[pillarKey] || pillarKey;
+}
+
 export const ANALYSTS = [
   {
     number: 1,
@@ -33,8 +77,9 @@ export const ANALYSTS = [
     title: "Spesialis Trend (Moving Averages)",
     kind: "api",
     quick: true,
+    pillar: "trend",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Trend (Moving Averages)", symbol, tradeMode)}\nTugas: tentukan apakah pasar Uptrend, Downtrend, atau Choppy/Sideways berdasarkan posisi harga relatif terhadap EMA20, EMA50, EMA200.`,
+      `${baseHeader("Spesialis Trend (Moving Averages)", symbol, tradeMode, "trend")}\nTugas: tentukan apakah pasar Uptrend, Downtrend, atau Choppy/Sideways berdasarkan posisi harga relatif terhadap EMA20, EMA50, EMA200. Sebagai PILAR 1, kesimpulan Anda jadi acuan ARAH BESAR yang harus didukung 2 pilar lain (Level Kunci & Momentum) sebelum sinyal dianggap kuat.`,
     buildDataSlice: (pkg) => ({
       lastPrice: pkg.lastPrice,
       ema20: pkg.primary.indicators.ema20,
@@ -48,8 +93,9 @@ export const ANALYSTS = [
     title: "Spesialis Momentum (Oscillators)",
     kind: "api",
     quick: true,
+    pillar: "momentum",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Momentum (Oscillators)", symbol, tradeMode)}\nTugas: baca RSI, MACD, dan Stochastic. Nilai apakah pergerakan harga didukung momentum kuat, atau ada indikasi Divergence (sinyal pembalikan).`,
+      `${baseHeader("Spesialis Momentum (Oscillators)", symbol, tradeMode, "momentum")}\nTugas: baca RSI, MACD, dan Stochastic. Nilai apakah pergerakan harga didukung momentum kuat, atau ada indikasi Divergence (sinyal pembalikan). Sebagai bagian PILAR 3 (Momentum/Konfirmasi), fokus jawab: apakah momentum saat ini MENGKONFIRMASI entry ke arah tertentu SEKARANG, bukan cuma arah umum jangka panjang.`,
     buildDataSlice: (pkg) => ({
       rsi14: pkg.primary.indicators.rsi14,
       macd: pkg.primary.indicators.macd,
@@ -62,8 +108,9 @@ export const ANALYSTS = [
     title: "Spesialis Volatilitas (Bands & ATR)",
     kind: "api",
     quick: true,
+    pillar: "supporting",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Volatilitas (Bands & ATR)", symbol, tradeMode)}\nTugas: analisa Bollinger Bands & ATR. Ukur seberapa liar pergerakan harga, dan deteksi potensi breakout kalau bands menyempit (squeeze).`,
+      `${baseHeader("Spesialis Volatilitas (Bands & ATR)", symbol, tradeMode, "supporting")}\nTugas: analisa Bollinger Bands & ATR. Ukur seberapa liar pergerakan harga, dan deteksi potensi breakout kalau bands menyempit (squeeze). Sebutkan juga apakah volatilitas saat ini mendukung entry AMAN (tidak terlalu liar) atau berisiko tinggi (whipsaw).`,
     buildDataSlice: (pkg) => ({
       lastPrice: pkg.lastPrice,
       bollinger: pkg.primary.indicators.bollinger,
@@ -76,8 +123,9 @@ export const ANALYSTS = [
     title: "Spesialis Volume (Aliran Uang)",
     kind: "api",
     quick: false,
+    pillar: "supporting",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Volume (Aliran Uang)", symbol, tradeMode)}\nTugas: baca On-Balance Volume (OBV). Konfirmasi apakah pergerakan harga didukung volume besar (valid) atau lemah (indikasi fakeout).${
+      `${baseHeader("Spesialis Volume (Aliran Uang)", symbol, tradeMode, "supporting")}\nTugas: baca On-Balance Volume (OBV). Konfirmasi apakah pergerakan harga didukung volume besar (valid) atau lemah (indikasi fakeout).${
         MT5_SYMBOLS.has(symbol)
           ? '\nCATATAN: untuk simbol ini, "volume" yang tersedia adalah TICK VOLUME dari MT5 (jumlah perubahan harga), BUKAN volume transaksi riil (pasar forex/CFD itu OTC, tidak ada bursa tunggal yang bisa kasih volume pasti). Beri opini dengan keyakinan LEBIH RENDAH dibanding kalau ini data kripto.'
           : ""
@@ -93,8 +141,9 @@ export const ANALYSTS = [
     title: "Spesialis Support & Resistance",
     kind: "api",
     quick: true,
+    pillar: "level",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Support & Resistance", symbol, tradeMode)}\nTugas: identifikasi level kunci historis, Pivot Points, dan Fibonacci Retracement. Beri titik bouncing yang potensial.`,
+      `${baseHeader("Spesialis Support & Resistance", symbol, tradeMode, "level")}\nTugas: identifikasi level kunci historis, Pivot Points, dan Fibonacci Retracement. Sebagai pemegang PILAR 2 (Level Kunci), WAJIB tegaskan: apakah harga SEKARANG sedang berada di/dekat zona reaksi (support/resistance/pivot/fibo), atau justru di tengah kekosongan (no man's land) — sinyal entry jauh lebih valid kalau dekat level kunci.`,
     buildDataSlice: (pkg) => ({
       lastPrice: pkg.lastPrice,
       supportResistanceHistoris: {
@@ -111,8 +160,9 @@ export const ANALYSTS = [
     title: "Spesialis Struktur Pasar / Smart Money Concepts",
     kind: "api",
     quick: false,
+    pillar: "level",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Smart Money Concepts (SMC)", symbol, tradeMode)}\nTugas: cari Order Block, Fair Value Gap (FVG)/imbalance, Liquidity Grab, dan Break of Structure (BoS). Fokus area yang kemungkinan jadi acuan institusi besar.\nCATATAN: data SMC ini hasil heuristik otomatis, bukan deteksi sempurna — nilai kewajarannya.`,
+      `${baseHeader("Spesialis Smart Money Concepts (SMC)", symbol, tradeMode, "level")}\nTugas: cari Order Block, Fair Value Gap (FVG)/imbalance, Liquidity Grab, dan Break of Structure (BoS). Sebagai bagian PILAR 2 (Level Kunci) bersama AI Support/Resistance, fokus: apakah harga sekarang berada di zona institusional (Order Block/FVG) yang jadi acuan reaksi harga.\nCATATAN: data SMC ini hasil heuristik otomatis, bukan deteksi sempurna — nilai kewajarannya.`,
     buildDataSlice: (pkg) => pkg.smc,
   },
   {
@@ -121,8 +171,9 @@ export const ANALYSTS = [
     title: "Spesialis Price Action (Candlestick, dari Data OHLC)",
     kind: "api",
     quick: false,
+    pillar: "momentum",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Price Action (Candlestick)", symbol, tradeMode)}\nTugas: baca deretan candle OHLC mentah (open/high/low/close) beberapa candle terakhir. Identifikasi pola candlestick yang relevan (misal Bullish/Bearish Engulfing, Pin Bar/Hammer, Doji, Shooting Star, Marubozu) dan nilai apa artinya untuk momentum saat ini.`,
+      `${baseHeader("Spesialis Price Action (Candlestick)", symbol, tradeMode, "momentum")}\nTugas: baca deretan candle OHLC mentah (open/high/low/close) beberapa candle terakhir. Identifikasi pola candlestick yang relevan (misal Bullish/Bearish Engulfing, Pin Bar/Hammer, Doji, Shooting Star, Marubozu). Sebagai bagian PILAR 3 (Momentum/Konfirmasi) bersama AI Momentum, fokus: apakah pola candle ini MENGKONFIRMASI entry sekarang atau justru memberi sinyal ragu (indecision candle).`,
     buildDataSlice: (pkg) => ({
       candleTerakhir: pkg.primary.candles.slice(-15).map((c) => ({
         open: c.open,
@@ -139,8 +190,9 @@ export const ANALYSTS = [
     title: "Spesialis Multi-Timeframe (MTF) Alignment",
     kind: "api",
     quick: false,
+    pillar: "supporting",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Multi-Timeframe (MTF) Alignment", symbol, tradeMode)}\nTugas: bandingkan tren di timeframe utama vs timeframe lebih besar (HTF). Kalau HTF Bearish tapi timeframe utama Bullish (atau sebaliknya), beri PERINGATAN risiko tinggi karena melawan tren besar.`,
+      `${baseHeader("Spesialis Multi-Timeframe (MTF) Alignment", symbol, tradeMode, "supporting")}\nTugas: bandingkan tren di timeframe utama vs timeframe lebih besar (HTF). Kalau HTF Bearish tapi timeframe utama Bullish (atau sebaliknya), beri PERINGATAN risiko tinggi karena melawan tren besar.`,
     buildDataSlice: (pkg) => ({
       timeframeUtama: pkg.primaryInterval,
       timeframeBesar: pkg.htfInterval,
@@ -163,8 +215,9 @@ export const ANALYSTS = [
     title: "Spesialis Konteks Makro",
     kind: "api",
     quick: false,
+    pillar: "supporting",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Konteks Makro", symbol, tradeMode)}\nTugas: nilai sentimen pasar secara umum dari BTC Dominance & Fear/Greed Index (data khusus kripto). Kalau field "notApplicable" bernilai true (artinya simbol ini BUKAN kripto, misal XAUUSD/Gold), JANGAN memaksakan opini dari data itu — cukup sebutkan data makro ini tidak relevan untuk simbol ini, dan beri "Bias: Netral" untuk dimensi ini saja. Kalau data null (bukan notApplicable, tapi API gagal), sebutkan itu dan beri opini netral juga.`,
+      `${baseHeader("Spesialis Konteks Makro", symbol, tradeMode, "supporting")}\nTugas: nilai sentimen pasar secara umum dari BTC Dominance & Fear/Greed Index (data khusus kripto). Kalau field "notApplicable" bernilai true (artinya simbol ini BUKAN kripto, misal XAUUSD/Gold), JANGAN memaksakan opini dari data itu — cukup sebutkan data makro ini tidak relevan untuk simbol ini, dan beri "Bias: Netral" untuk dimensi ini saja. Kalau data null (bukan notApplicable, tapi API gagal), sebutkan itu dan beri opini netral juga.`,
     buildDataSlice: (pkg) => pkg.macro,
   },
   {
@@ -173,8 +226,9 @@ export const ANALYSTS = [
     title: "Spesialis Risk Management (Kalkulator Setup)",
     kind: "api",
     quick: true,
+    pillar: "supporting",
     buildSystemPrompt: (symbol, tradeMode) =>
-      `${baseHeader("Spesialis Risk Management", symbol, tradeMode)}\nTugas: JANGAN menebak arah pasar. Fokus RUMUSKAN trading plan: usulan jarak Stop-Loss logis berbasis ATR (misal 1.5x ATR dari harga saat ini), usulan Take-Profit (misal 2-3x jarak SL), dan rasio Risk:Reward minimum yang wajar untuk mode trading ini.`,
+      `${baseHeader("Spesialis Risk Management", symbol, tradeMode, "supporting")}\nTugas: JANGAN menebak arah pasar. Fokus RUMUSKAN trading plan: usulan jarak Stop-Loss logis berbasis ATR (misal 1.5x ATR dari harga saat ini), usulan Take-Profit (misal 2-3x jarak SL), dan rasio Risk:Reward minimum yang wajar untuk mode trading ini.`,
     buildDataSlice: (pkg) => ({
       lastPrice: pkg.lastPrice,
       atr14: pkg.primary.indicators.atr14,
@@ -188,8 +242,11 @@ export const ANALYSTS = [
  * fokus khusus Fibonacci Retracement (arah otomatis) & pola Quasimodo (QM)
  * sebagai PERTIMBANGAN UTAMA, sisanya (Trend/Momentum/Volume/Risk Mgmt)
  * jadi KONFIRMASI/PENUNJANG saja — bukan voting bias yang sejajar seperti
- * mode Cepat/Lengkap. Lihat instruksi khusus di tiap buildSystemPrompt &
- * catatan di summarizeSignals() (groqVision.js) soal bobot penimbangan.
+ * mode Cepat/Lengkap. Ini sudah mengikuti semangat yang sama dengan strategi
+ * "Konfluensi 3 Pilar" di atas (primary vs supporting), jadi TIDAK diubah —
+ * cukup dibiarkan sebagai varian mode tersendiri. Lihat instruksi khusus di
+ * tiap buildSystemPrompt & catatan di summarizeSignals() (groqVision.js)
+ * soal bobot penimbangan.
  */
 function fiboQmHeader(title, symbol, tradeMode, role) {
   const roleNote =
