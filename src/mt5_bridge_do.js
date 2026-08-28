@@ -10,7 +10,11 @@
  * 2. Nyimpen ANTRIAN sinyal yang perlu dieksekusi ke MT5 (BUY/SELL dari AI
  *    Penyimpul), yang nanti di-POLLING oleh bridge Python, dieksekusi di
  *    MT5, lalu hasilnya (ticket, fill price, sukses/gagal) dilaporkan balik
- *    lewat reportExecution -> Worker kirim notifikasi ke Telegram.
+ *    lewat reportExecution -> Worker kirim notifikasi ke Telegram. Bridge
+ *    juga bisa lapor lewat reportForceClose kalau posisi ditutup otomatis
+ *    karena floating profit/rugi menyentuh ambang % dari balance (lihat
+ *    check_and_force_close() di mt5_bridge.py), duluan sebelum harga
+ *    sempat sampai ke level SL/TP asli sinyal.
  *
  * Pola klaim (claim/pending/ready) dipakai lagi di sini, sama seperti
  * claimPhotoPromptMsgId di session_do.js, supaya kalau bridge polling
@@ -101,7 +105,27 @@ export class Mt5BridgeDO {
         // condition kalau 2 siklus auto kebetulan jalan hampir bersamaan.
         risk.tradesToday += 1;
         await this.storage.put("riskState", risk);
-        return Response.json({ allowed: true });
+        // `balance` ikut dikembalikan supaya session_do.js bisa langsung
+        // hitung lot berbasis % risiko tanpa perlu round-trip lagi.
+        return Response.json({ allowed: true, balance: risk.lastBalance });
+      }
+
+      // --- Snapshot ringan status risiko (posisi terbuka + balance), TANPA
+      // efek samping apa pun (tidak increment tradesToday). Dipakai
+      // session_do.js buat cek "masih ada posisi terbuka?" SEBELUM mulai
+      // siklus auto (hemat limit API Groq) — BUKAN buat validasi guardrail
+      // eksekusi (pakai checkAutonomousGuardrails untuk itu).
+      case "getRiskSnapshot": {
+        const risk = await this.storage.get("riskState");
+        if (!risk) {
+          return Response.json({ openPositionTicket: null, balance: null, stale: true });
+        }
+        const age = Date.now() - risk.updatedAt;
+        return Response.json({
+          openPositionTicket: risk.openPositionTicket ?? null,
+          balance: risk.lastBalance ?? null,
+          stale: age > 5 * 60 * 1000,
+        });
       }
 
       case "pushCandles": {
@@ -168,7 +192,46 @@ export class Mt5BridgeDO {
         record.message = message ?? null;
         record.executedAt = Date.now();
         await this.storage.put(`pending:${signalId}`, record);
+
+        // Simpan pemetaan ticket -> {signalId, chatId}. Nanti kalau posisi
+        // ini di-force-close otomatis oleh bridge (floating % nyentuh
+        // ambang, lihat "reportForceClose" di bawah), yang dikirim bridge
+        // cuma ticket-nya saja -- lewat pemetaan ini Worker tetap tahu
+        // harus kirim notifikasi ke chat mana.
+        if (status === "filled" && ticket != null) {
+          await this.storage.put(`ticketMap:${ticket}`, { signalId, chatId: record.chatId });
+        }
+
         return Response.json({ ok: true, record });
+      }
+
+      // --- Bridge lapor force-close otomatis: floating profit/rugi posisi
+      // sudah nyentuh ambang % dari balance (RISK_TP_PCT/RISK_SL_PCT, lihat
+      // check_and_force_close() di mt5_bridge.py) SEBELUM harga sempat
+      // sampai ke level SL/TP asli dari AI Penyimpul. Juga membersihkan
+      // openPositionTicket di riskState SEKARANG JUGA (jangan nunggu siklus
+      // reportStatus berikutnya) supaya siklus auto berikutnya tidak salah
+      // kira posisi masih terbuka.
+      case "reportForceClose": {
+        const { ticket, reason, profitPct, closePrice, volume } = await request.json();
+        const mapped = ticket != null ? await this.storage.get(`ticketMap:${ticket}`) : null;
+
+        const risk = await this.storage.get("riskState");
+        if (risk && risk.openPositionTicket === ticket) {
+          risk.openPositionTicket = null;
+          risk.updatedAt = Date.now();
+          await this.storage.put("riskState", risk);
+        }
+
+        return Response.json({
+          ok: true,
+          chatId: mapped?.chatId ?? null,
+          signalId: mapped?.signalId ?? null,
+          reason,
+          profitPct,
+          closePrice,
+          volume,
+        });
       }
 
       default:

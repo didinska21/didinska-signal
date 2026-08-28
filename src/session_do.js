@@ -20,15 +20,18 @@ import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
 import { buildMarketDataPackage } from "./marketData.js";
 import { fetchCurrentPrice, isMt5Symbol } from "./marketSource.js";
 import { buildSignalChartImage } from "./ChartImage.js";
-import { enqueueMt5Execution, checkMt5AutonomousGuardrails } from "./mt5Exec.js";
+import { enqueueMt5Execution, checkMt5AutonomousGuardrails, getMt5RiskSnapshot } from "./mt5Exec.js";
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
 
-// Lot default untuk eksekusi otomatis ke MT5 (demo). Bisa dioverride lewat
-// env var MT5_DEFAULT_LOT. Ini SENGAJA fixed-lot sederhana (bukan position
-// sizing berbasis % risiko akun) — cukup untuk tahap demo/testing awal.
+// Lot default untuk eksekusi MANUAL ke MT5 (demo) — dipakai waktu user
+// SENDIRI klik tombol "Signal Trade" di Telegram, jadi tetap fixed-lot
+// sederhana (bukan position sizing % risiko). Bisa dioverride lewat env var
+// MT5_DEFAULT_LOT. Jalur OTONOM (/auto XAUUSD) TIDAK memakai ini lagi — lot
+// di jalur itu dihitung dinamis dari % risiko, lihat RISK_SL_PCT &
+// calcRiskBasedLot di bawah.
 const DEFAULT_MT5_LOT = 0.01;
 
 // --- Kontrol risiko mode OTONOM (khusus XAUUSD, siklus auto-signal tanpa
@@ -40,6 +43,53 @@ const DEFAULT_MT5_LOT = 0.01;
 const AUTONOMOUS_XAUUSD_ENABLED = (env) => env.MT5_AUTONOMOUS_XAUUSD === "true";
 const DEFAULT_MAX_TRADES_PER_DAY = 5;
 const DEFAULT_MAX_DAILY_LOSS_PCT = 3;
+
+// --- Position sizing dinamis berbasis % risiko (KHUSUS jalur OTONOM XAUUSD)
+// ---
+// Harga SL/TP TETAP dari AI Penyimpul, dikirim apa adanya sebagai native
+// SL/TP order ke MT5 (tidak diubah) — jadi tetap jadi jaring pengaman utama
+// walau bridge Python di laptop mati/disconnect. Yang dihitung ulang TIAP
+// ENTRY cuma LOT-nya, dari BALANCE saat itu, supaya kalau SL asli itu
+// sampai kena, kerugian selalu ≈ RISK_SL_PCT% dari balance -- bukan nominal
+// $ tetap seperti lot fixed sebelumnya (yang persentasenya "geser" seiring
+// balance naik/turun).
+//
+// RISK_TP_PCT dipakai bridge Python (mt5_bridge.py, check_and_force_close())
+// untuk memantau floating profit/rugi posisi & force-close SEBELUM harga
+// sempat sampai ke level SL/TP asli, kalau ambang % itu kena duluan. Jadi
+// ada 2 lapis proteksi yang jalan paralel -- native SL/TP (berbasis harga)
+// dan force-close berbasis % (berbasis floating $) -- siapa pun yang kena
+// duluan yang menentukan penutupan posisi.
+const RISK_SL_PCT = 1;
+const RISK_TP_PCT = 2;
+// Asumsi kontrak standar XAUUSD: 1.00 lot = 100 troy oz, jadi pergerakan
+// harga $1 = $100/lot (≈$1 per 0.01 lot). Kalau broker kamu ternyata beda
+// (jarang, tapi ada), sesuaikan angka ini.
+const XAUUSD_CONTRACT_SIZE = 100;
+const MT5_LOT_STEP = 0.01;
+const MT5_MIN_LOT = 0.01;
+
+/**
+ * Hitung lot supaya KALAU harga sampai kena SL asli (dari AI Penyimpul),
+ * kerugian ≈ RISK_SL_PCT% dari balance saat ini. Dibulatkan KE BAWAH ke
+ * kelipatan MT5_LOT_STEP terdekat — lebih aman risiko sedikit di BAWAH
+ * target daripada melebihi tanpa sengaja karena pembulatan.
+ *
+ * Return null kalau balance/jarak SL tidak valid (harusnya sudah ketapis
+ * oleh validasi Entry/SL/TP logis sebelum fungsi ini dipanggil, tapi tetap
+ * dijaga di sini juga demi keamanan).
+ */
+function calcRiskBasedLot(balance, entryPrice, slPrice) {
+  const slDistance = Math.abs(entryPrice - slPrice);
+  if (!(balance > 0) || !(slDistance > 0)) return null;
+
+  const riskAmount = (RISK_SL_PCT / 100) * balance;
+  const rawLot = riskAmount / (slDistance * XAUUSD_CONTRACT_SIZE);
+  const flooredLot = Math.floor(rawLot / MT5_LOT_STEP) * MT5_LOT_STEP;
+  const lot = Number(flooredLot.toFixed(2)); // buang residu floating-point
+
+  return { lot, slDistance, riskAmount };
+}
 
 export class SessionDO {
   constructor(state, env) {
@@ -368,25 +418,39 @@ export class SessionDO {
                 `🤖⛔ Sinyal ${decision} (Auto-Signal) TIDAK dieksekusi ke MT5: ${escapeHtml(guard.reason)}`
               );
             } else {
-              try {
-                const lot = Number(this.env.MT5_DEFAULT_LOT) || DEFAULT_MT5_LOT;
-                await enqueueMt5Execution(this.env, symbol, {
-                  signalId,
-                  chatId,
-                  decision,
-                  entry: entryPrice,
-                  sl: slPrice,
-                  tp: tpPrice,
-                  lot,
-                });
+              // Lot DIHITUNG DINAMIS dari balance saat ini (bukan fixed lagi)
+              // -- SL/TP harga TETAP dari AI Penyimpul, cuma lot-nya yang
+              // disesuaikan supaya risiko ke SL asli ≈ RISK_SL_PCT% balance.
+              const sizing = calcRiskBasedLot(guard.balance, entryPrice, slPrice);
+              const slDistanceLabel = sizing ? sizing.slDistance.toFixed(2) : "?";
+              const balanceLabel = typeof guard.balance === "number" ? guard.balance.toFixed(2) : "?";
+
+              if (!sizing || sizing.lot < MT5_MIN_LOT) {
                 await sendMessage(
                   this.env,
                   chatId,
-                  `🤖🔗 Sinyal ${decision} (Auto-Signal) sudah diantre ke MT5 bridge (lot ${lot}).`
+                  `🤖⛔ Sinyal ${decision} (Auto-Signal) TIDAK dieksekusi ke MT5: lot hasil hitung risiko ${RISK_SL_PCT}% (balance $${balanceLabel}, jarak SL ${slDistanceLabel}) ada di bawah lot minimum ${MT5_MIN_LOT}. Modal kemungkinan terlalu kecil untuk jarak SL sinyal ini.`
                 );
-              } catch (err) {
-                console.error("Gagal antre eksekusi MT5 (auto):", err);
-                await sendMessage(this.env, chatId, `⚠️ Auto-Signal gagal antre eksekusi MT5: ${escapeHtml(err.message)}`);
+              } else {
+                try {
+                  await enqueueMt5Execution(this.env, symbol, {
+                    signalId,
+                    chatId,
+                    decision,
+                    entry: entryPrice,
+                    sl: slPrice,
+                    tp: tpPrice,
+                    lot: sizing.lot,
+                  });
+                  await sendMessage(
+                    this.env,
+                    chatId,
+                    `🤖🔗 Sinyal ${decision} (Auto-Signal) sudah diantre ke MT5 bridge.\nLot: ${sizing.lot} (≈${RISK_SL_PCT}% risiko = $${sizing.riskAmount.toFixed(2)} dari balance $${balanceLabel}, kalau SL asli kena).\nLapisan tambahan: force-close otomatis kalau floating duluan nyentuh +${RISK_TP_PCT}%/-${RISK_SL_PCT}% balance (jalan di bridge Python), sebelum harga sempat sampai level SL/TP asli sinyal ini.`
+                  );
+                } catch (err) {
+                  console.error("Gagal antre eksekusi MT5 (auto):", err);
+                  await sendMessage(this.env, chatId, `⚠️ Auto-Signal gagal antre eksekusi MT5: ${escapeHtml(err.message)}`);
+                }
               }
             }
           } else {
@@ -513,6 +577,27 @@ export class SessionDO {
     if (!chatId) return;
 
     await this.checkOpenSignalsAgainstPrice(symbol, chatId);
+
+    // --- Skip siklus (TANPA ambil data pasar / panggil AI sama sekali)
+    // kalau MASIH ADA posisi MT5 terbuka dari bot ini (khusus simbol MT5,
+    // misal XAUUSD) -- toh selama posisi masih terbuka, guardrail "1
+    // posisi" bakal nolak eksekusi baru juga nanti; jadi analisa 10 AI +
+    // generate sinyal sekarang cuma buang-buang limit API Groq. Dicek pakai
+    // getMt5RiskSnapshot (read-only, TIDAK increment counter trade harian,
+    // beda dengan checkAutonomousGuardrails). Diam saja kalau di-skip (tidak
+    // kirim notifikasi tiap 10 menit ke Telegram) supaya tidak spam --
+    // cukup dijadwalkan ulang seperti siklus normal.
+    if (isMt5Symbol(symbol)) {
+      const snapshot = await getMt5RiskSnapshot(this.env, symbol);
+      if (snapshot.openPositionTicket) {
+        const stillAutoAfterSkip = await this.storage.get("autoMode");
+        if (stillAutoAfterSkip) {
+          await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+          await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
+        }
+        return;
+      }
+    }
 
     try {
       const sent = await sendMessage(this.env, chatId, `🤖 <b>Auto-Signal</b> — mengambil data pasar ${symbol}...`);
@@ -792,23 +877,26 @@ export function computePillarAlignment(opinions, aiMode) {
  * (entryPrice/slPrice/tpPrice), bukan dari teks bebas AI — supaya
  * formatnya selalu rapi & konsisten walau gaya tulis AI berubah-ubah.
  */
-function buildSignalCodeBlock({ symbol, decision, entryPrice, slPrice, tpPrice, pillarAlignment }) {
+export function buildSignalCodeBlock({ symbol, decision, entryPrice, slPrice, tpPrice, pillarAlignment }) {
   if (!decision) return null;
 
   const decisionEmoji = decision === "BUY" ? "🟢" : decision === "SELL" ? "🔴" : "🟡";
-  const lines = [`${decisionEmoji} ${symbol}  —  ${decision}`, "─────────────────────"];
+  const lines = [`${decisionEmoji} ${symbol}  —  ${decision}`];
 
-  if (entryPrice != null) lines.push(`Entry : ${entryPrice}`);
-  if (slPrice != null) lines.push(`SL    : ${slPrice}  🔴`);
-  if (tpPrice != null) lines.push(`TP    : ${tpPrice}  🟢`);
-
+  const riskLines = [];
+  if (entryPrice != null) riskLines.push(`Entry : ${entryPrice}`);
+  if (slPrice != null) riskLines.push(`SL    : ${slPrice}  🔴`);
+  if (tpPrice != null) riskLines.push(`TP    : ${tpPrice}  🟢`);
   if (entryPrice != null && slPrice != null && tpPrice != null) {
     const risk = Math.abs(entryPrice - slPrice);
     const reward = Math.abs(tpPrice - entryPrice);
-    if (risk > 0) {
-      const rr = (reward / risk).toFixed(2);
-      lines.push(`R:R   : 1 : ${rr}`);
-    }
+    if (risk > 0) riskLines.push(`R:R   : 1 : ${(reward / risk).toFixed(2)}`);
+  }
+  // Cuma tambah garis pemisah + block risiko kalau memang ADA datanya --
+  // mode WAIT tidak punya entry/SL/TP, jadi jangan tampilkan garis kosong.
+  if (riskLines.length > 0) {
+    lines.push("─────────────────────");
+    lines.push(...riskLines);
   }
 
   if (pillarAlignment) {
@@ -819,18 +907,42 @@ function buildSignalCodeBlock({ symbol, decision, entryPrice, slPrice, tpPrice, 
   return `<pre>${escapeHtml(lines.join("\n"))}</pre>`;
 }
 
-function enforceBiasTally(text, tally, total) {
+export function enforceBiasTally(text, tally, total) {
   const tallyStr = `(${tally.bullish} Bullish, ${tally.bearish} Bearish, ${tally.netral} Netral dari total ${total} AI spesialis)`;
-  const probLineRe = /(📈\s*Probabilitas:[^\n]*)/i;
 
-  if (probLineRe.test(text)) {
-    return text.replace(probLineRe, (line) => {
-      const withoutOldParenthetical = line.replace(/\([^)]*\)\s*$/, "").trim();
-      return `${withoutOldParenthetical} ${tallyStr}`;
-    });
+  // Kadang AI (gpt-oss) nulis baris "📈 Probabilitas" LEBIH DARI SEKALI --
+  // misal 1x normal di tengah jawaban + 1x lagi placeholder kosong dekat
+  // kalimat penutup (kebingungan soal instruksi "akan ditambahkan otomatis
+  // oleh sistem"), kadang juga dibungkus markdown **bold**. Supaya tidak
+  // dobel di pesan final: cari SEMUA baris yang mengandung "📈" + kata
+  // "Probabilitas" (case-insensitive, longgar soal markdown di sekitarnya),
+  // ambil angka persentase dari kemunculan MANAPUN yang punya, buang semua
+  // baris itu, lalu sisipkan SATU baris final bersih di posisi kemunculan
+  // pertama.
+  const lines = text.split("\n");
+  const keptLines = [];
+  let insertIndex = -1;
+  let percentPart = "";
+
+  for (const line of lines) {
+    if (/📈/.test(line) && /probabilitas/i.test(line)) {
+      if (insertIndex === -1) insertIndex = keptLines.length;
+      if (!percentPart) {
+        const found = /[±~]?\s*\d+(\.\d+)?\s*%/.exec(line);
+        if (found) percentPart = found[0].trim();
+      }
+      continue; // baris ini dibuang, akan diganti 1 baris final di bawah
+    }
+    keptLines.push(line);
   }
 
-  return `${text}\n\n📈 Probabilitas: ${tallyStr}`;
+  const canonicalLine = `📈 Probabilitas: ${percentPart ? `${percentPart} ` : ""}${tallyStr}`;
+
+  if (insertIndex === -1) {
+    return `${keptLines.join("\n")}\n\n${canonicalLine}`;
+  }
+  keptLines.splice(insertIndex, 0, canonicalLine);
+  return keptLines.join("\n");
 }
 
 async function safeEdit(env, chatId, messageId, text, replyMarkup) {

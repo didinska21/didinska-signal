@@ -38,3 +38,26 @@ export async function checkMt5AutonomousGuardrails(env, symbol, { maxTradesPerDa
   }
   return res.json();
 }
+
+/**
+ * Ambil snapshot ringan status risiko (posisi terbuka & balance) TANPA efek
+ * samping apa pun (TIDAK increment counter trade harian, beda dengan
+ * checkMt5AutonomousGuardrails). Dipakai session_do.js buat cek "masih ada
+ * posisi terbuka?" SEBELUM mulai siklus auto-signal (ambil data pasar +
+ * panggil AI) — supaya kalau memang masih ada posisi, siklus bisa di-skip
+ * lebih awal dan tidak buang-buang limit API Groq untuk sinyal yang toh
+ * bakal ditolak guardrail juga nantinya.
+ */
+export async function getMt5RiskSnapshot(env, symbol) {
+  const id = env.MT5_BRIDGE_DO.idFromName(symbol);
+  const stub = env.MT5_BRIDGE_DO.get(id);
+
+  const res = await stub.fetch("https://mt5-bridge/getRiskSnapshot");
+  if (!res.ok) {
+    // Gagal ambil snapshot -> anggap TIDAK ADA posisi terbuka (jangan
+    // sampai skip siklus gara-gara error jaringan sesaat). Guardrail
+    // eksekusi yang sebenarnya tetap jalan normal di tahap enqueue nanti.
+    return { openPositionTicket: null, balance: null, stale: true };
+  }
+  return res.json();
+}

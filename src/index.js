@@ -97,6 +97,45 @@ async function handleMt5BridgeRequest(request, env, pathname) {
     return new Response(await res.text(), { status: res.status, headers: { "Content-Type": "application/json" } });
   }
 
+  // --- Bridge lapor force-close otomatis (floating profit/rugi posisi
+  // sudah nyentuh ambang % dari balance, SEBELUM harga sempat sampai ke
+  // level SL/TP asli sinyal): POST /mt5-bridge/forceclose ---
+  if (pathname === "/mt5-bridge/forceclose" && request.method === "POST") {
+    const body = await request.json();
+    const { symbol, ticket, reason, profitPct, closePrice, volume } = body;
+    if (!symbol || ticket == null) {
+      return Response.json({ ok: false, error: "symbol/ticket wajib diisi" }, { status: 400 });
+    }
+    const stub = getMt5Stub(env, symbol);
+    const res = await stub.fetch("https://mt5-bridge/reportForceClose", {
+      method: "POST",
+      body: JSON.stringify({ ticket, reason, profitPct, closePrice, volume }),
+    });
+    const resultJson = await res.json();
+
+    // Notifikasi ke user Telegram (best-effort, tidak menggagalkan response
+    // ke bridge kalau notifikasi gagal terkirim) -- cuma bisa dikirim kalau
+    // ticket ini ketemu pemetaan chatId-nya (lihat reportExecution/ticketMap
+    // di mt5_bridge_do.js).
+    if (resultJson.chatId) {
+      try {
+        const isTp = reason === "tp_pct";
+        const label = isTp ? "🔒✅ Profit Lock (floating % balance)" : "🔒❌ Cut Loss (floating % balance)";
+        const pctLabel = typeof profitPct === "number" ? profitPct.toFixed(2) : String(profitPct ?? "-");
+        const text =
+          `${label}\nSimbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket))}\n` +
+          `Floating saat ditutup: ${escapeHtml(pctLabel)}% dari balance\n` +
+          `Harga tutup: ${escapeHtml(String(closePrice ?? "-"))} | Lot: ${escapeHtml(String(volume ?? "-"))}\n\n` +
+          `<i>Ditutup otomatis oleh bridge karena floating sudah mencapai ambang %, sebelum harga sempat sampai ke level SL/TP asli sinyal ini.</i>`;
+        await sendMessage(env, resultJson.chatId, text);
+      } catch (err) {
+        console.error("Gagal kirim notifikasi force-close MT5:", err);
+      }
+    }
+
+    return Response.json(resultJson, { status: res.status });
+  }
+
   return new Response("Not found", { status: 404 });
 }
 
