@@ -54,7 +54,8 @@ Biarkan jendela CMD ini **tetap terbuka** selama kamu mau bot bisa analisa XAUUS
 
 ## Yang perlu kamu tahu / batasan tahap ini
 
-- **Lot size FIXED** (default 0.01, bisa diubah lewat env var `MT5_DEFAULT_LOT` di Worker) — belum ada position sizing berbasis % risiko akun. Kalau mau lebih canggih, ini bagian yang perlu dikembangkan lebih lanjut.
+- **Lot size**: eksekusi MANUAL (klik tombol Signal Trade) masih **FIXED** (default 0.01, bisa diubah lewat env var `MT5_DEFAULT_LOT` di Worker). Eksekusi **OTONOM** (`/auto XAUUSD`) sudah **dinamis** — dihitung tiap entry dari balance saat itu supaya risiko ke SL asli ≈ 1% balance (lihat `RISK_SL_PCT`/`calcRiskBasedLot` di `src/session_do.js`). Kalau modal terlalu kecil untuk jarak SL sinyal (lot hasil hitung < lot minimum), eksekusi dibatalkan otomatis (bukan dipaksa pakai lot minimum).
+- **Force-close berbasis %**: selain native SL/TP di order (harga persis dari AI Penyimpul), script ini juga cek floating profit/rugi tiap siklus polling (`check_and_force_close()`) dan tutup paksa posisi kalau floating sudah nyentuh `FORCE_CLOSE_PROFIT_PCT`/`FORCE_CLOSE_LOSS_PCT` (default +2%/-1% dari balance) — SEBELUM harga sempat sampai ke level SL/TP native. Dua lapis ini jalan paralel; siapa pun yang kena duluan yang menutup posisi.
 - **Safety check demo-only** ada di `mt5_bridge.py` (`REQUIRE_DEMO_ACCOUNT = True`) — script akan menolak jalan kalau akun yang login ternyata bukan demo. JANGAN diubah sampai kamu benar-benar siap & paham risikonya.
-- Bridge ini jalan **lokal di laptop kamu**. Kalau laptop mati/sleep/tidak ada koneksi internet, seluruh alur (data candle & eksekusi) berhenti. Ini yang nanti perlu dipindah ke VPS supaya bisa nyala 24 jam.
-- Slippage/deviation eksekusi di-set 20 poin (`deviation` di `execute_order()`) — sesuaikan kalau spread XAUUSD broker kamu lebih lebar dari itu.
+- Bridge ini jalan **lokal di laptop kamu**. Kalau laptop mati/sleep/tidak ada koneksi internet, seluruh alur (data candle, eksekusi, DAN force-close %) berhenti — tapi native SL/TP yang sudah terpasang di order tetap jalan di server broker walau laptop mati. Ini yang nanti perlu dipindah ke VPS supaya bisa nyala 24 jam.
+- Slippage/deviation eksekusi (termasuk force-close) di-set 20 poin (`deviation`) — sesuaikan kalau spread XAUUSD broker kamu lebih lebar dari itu.

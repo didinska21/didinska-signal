@@ -6,9 +6,19 @@ CARA KERJA (loop terus-menerus sampai di-Ctrl+C):
   1. PUSH candle terbaru XAUUSD (semua timeframe yang dibutuhkan bot: 1m,
      5m, 15m, 1h, 4h, 1d) ke Worker, tiap PUSH_INTERVAL_SEC detik.
   2. POLLING ke Worker: ada sinyal BUY/SELL yang perlu dieksekusi?
-     Kalau ada -> eksekusi market order ke MT5 (akun DEMO), lalu laporkan
-     hasilnya (sukses/gagal, ticket, harga fill) balik ke Worker supaya
-     bot bisa kirim notifikasi ke Telegram.
+     Kalau ada -> eksekusi market order ke MT5 (akun DEMO), dengan SL/TP
+     NATIVE (harga persis dari AI Penyimpul, dikirim sebagai bagian order
+     MT5 -- tetap jadi jaring pengaman utama walau script ini mati), lalu
+     laporkan hasilnya (sukses/gagal, ticket, harga fill) balik ke Worker
+     supaya bot bisa kirim notifikasi ke Telegram.
+  3. FORCE-CLOSE berbasis %: tiap siklus polling (tiap POLL_INTERVAL_SEC
+     detik), cek floating profit/rugi posisi bot ini yang lagi terbuka.
+     Kalau floating sudah nyentuh +FORCE_CLOSE_PROFIT_PCT% atau
+     -FORCE_CLOSE_LOSS_PCT% dari BALANCE -- SEBELUM harga sempat sampai ke
+     level SL/TP native di atas -- posisi ditutup manual sekarang juga
+     (lapor balik ke Worker juga, biar ada notifikasi Telegram). Jadi ada 2
+     lapis proteksi paralel: siapa pun (native price-based SL/TP, atau
+     floating %-based ini) yang kena duluan, itu yang menutup posisi.
 
 CARA PAKAI:
   1. pip install -r requirements.txt
@@ -71,6 +81,17 @@ POLL_INTERVAL_SEC = 5  # seberapa sering cek ada sinyal baru yang perlu diekseku
 REQUIRE_DEMO_ACCOUNT = True  # JANGAN diubah ke False kecuali kamu SENGAJA mau live & paham risikonya
 MAGIC_NUMBER = 20260815  # angka identifier order dari bot ini (biar gampang dibedain di history MT5)
 ORDER_COMMENT = "didinska-signal-bot"
+
+# Force-close berbasis floating profit/rugi, dalam % dari BALANCE (bukan
+# equity) -- dicek tiap POLL_INTERVAL_SEC detik, PARALEL dengan native
+# SL/TP yang sudah terpasang di order (lihat execute_order()). Siapa pun
+# yang kena duluan (harga sampai ke level SL/TP native, ATAU floating
+# sampai ke ambang % ini) yang menutup posisi. HARUS sinkron dengan
+# RISK_SL_PCT/RISK_TP_PCT di src/session_do.js (Worker) -- itu yang dipakai
+# buat hitung LOT (position sizing) supaya SL native ≈ FORCE_CLOSE_LOSS_PCT%
+# risiko; kalau salah satu diubah, ubah juga yang satunya biar tetap match.
+FORCE_CLOSE_PROFIT_PCT = 2.0  # tutup paksa (profit lock) di floating +2% balance
+FORCE_CLOSE_LOSS_PCT = 1.0  # tutup paksa (cut loss) di floating -1% balance
 
 # ============================================================================
 
@@ -322,10 +343,108 @@ def report_execution(signal_id, chat_id, status, ticket=None, fill_price=None, m
         log(f"⚠️ Gagal lapor hasil eksekusi ke Worker: {err}")
 
 
+def check_and_force_close():
+    """
+    Cek floating profit/rugi posisi bot ini (magic number cocok) yang lagi
+    terbuka. Kalau sudah nyentuh +FORCE_CLOSE_PROFIT_PCT% atau
+    -FORCE_CLOSE_LOSS_PCT% dari BALANCE, tutup paksa SEKARANG -- jangan
+    tunggu harga sampai ke level SL/TP native (yang bisa saja lebih jauh
+    dari ambang % ini, terutama TP, karena harga TP itu murni dari analisa
+    teknikal AI, bukan dihitung dari %).
+
+    Dipanggil tiap siklus polling (POLL_INTERVAL_SEC), sama seperti
+    poll_and_execute_signal() -- TIDAK butuh loop/thread terpisah.
+    """
+    try:
+        account_info = mt5.account_info()
+        if account_info is None:
+            return
+        balance = account_info.balance
+        if not balance or balance <= 0:
+            return
+
+        positions = mt5.positions_get(symbol=SYMBOL)
+        if not positions:
+            return
+        own_positions = [p for p in positions if p.magic == MAGIC_NUMBER]
+
+        for position in own_positions:
+            profit_pct = (position.profit / balance) * 100
+            if profit_pct >= FORCE_CLOSE_PROFIT_PCT:
+                close_position(position, "tp_pct", profit_pct)
+            elif profit_pct <= -FORCE_CLOSE_LOSS_PCT:
+                close_position(position, "sl_pct", profit_pct)
+    except Exception as err:
+        log(f"⚠️ Error cek force-close %: {err}")
+        traceback.print_exc()
+
+
+def close_position(position, reason, profit_pct):
+    """Tutup 1 posisi (order berlawanan arah, volume sama) & lapor ke Worker."""
+    tick = mt5.symbol_info_tick(SYMBOL)
+    if tick is None:
+        log(f"⚠️ Gagal force-close ticket {position.ticket}: tidak bisa ambil tick harga terkini.")
+        return
+
+    is_buy = position.type == mt5.ORDER_TYPE_BUY
+    close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+    price = tick.bid if is_buy else tick.ask
+
+    request_payload = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": SYMBOL,
+        "volume": position.volume,
+        "type": close_type,
+        "position": position.ticket,  # wajib diisi supaya MT5 tahu ini CLOSE, bukan order baru
+        "price": price,
+        "deviation": 20,
+        "magic": MAGIC_NUMBER,
+        "comment": f"force-close-{reason}",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+
+    result = mt5.order_send(request_payload)
+
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        err = mt5.last_error()
+        retcode = result.retcode if result else None
+        reason_desc = describe_retcode(retcode) if retcode is not None else "order_send mengembalikan None"
+        log(
+            f"❌ Force-close ticket {position.ticket} GAGAL (retcode={retcode}, {reason_desc}, last_error={err}). "
+            f"Posisi TETAP TERBUKA -- native SL/TP masih jadi jaring pengaman, akan dicoba lagi siklus berikutnya."
+        )
+        return
+
+    label = "TP (profit lock)" if reason == "tp_pct" else "SL (cut loss)"
+    log(f"🔒 Force-close ticket {position.ticket} sukses -- {label} di floating {profit_pct:.2f}% balance. Harga tutup={result.price}")
+    report_force_close(position.ticket, reason, profit_pct, result.price, position.volume)
+
+
+def report_force_close(ticket, reason, profit_pct, close_price, volume):
+    try:
+        requests.post(
+            f"{WORKER_URL}/mt5-bridge/forceclose",
+            json={
+                "symbol": SYMBOL,
+                "ticket": ticket,
+                "reason": reason,  # "tp_pct" | "sl_pct"
+                "profitPct": profit_pct,
+                "closePrice": close_price,
+                "volume": volume,
+            },
+            headers=HEADERS,
+            timeout=15,
+        )
+    except Exception as err:
+        log(f"⚠️ Gagal lapor force-close ke Worker: {err}")
+
+
 def main():
     log("Menghubungkan ke MT5...")
     connect_mt5()
     log(f"Bridge aktif untuk simbol {SYMBOL}. Push tiap {PUSH_INTERVAL_SEC}s, polling sinyal tiap {POLL_INTERVAL_SEC}s.")
+    log(f"Force-close otomatis aktif: +{FORCE_CLOSE_PROFIT_PCT}% (profit lock) / -{FORCE_CLOSE_LOSS_PCT}% (cut loss) dari balance.")
     log("Biarkan jendela ini tetap terbuka. Tekan Ctrl+C untuk berhenti.")
 
     last_push = 0
@@ -337,6 +456,7 @@ def main():
                 report_account_status()
                 last_push = now
 
+            check_and_force_close()
             poll_and_execute_signal()
             time.sleep(POLL_INTERVAL_SEC)
     except KeyboardInterrupt:
