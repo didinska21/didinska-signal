@@ -54,11 +54,13 @@ except ImportError:
 
 # URL worker kamu, TANPA trailing slash. Contoh:
 # "https://didinska-signal.<subdomain-kamu>.workers.dev"
-WORKER_URL = "https://didinska-signal.YOUR-SUBDOMAIN.workers.dev"
+# data ini adalah akun demo jadi biarkan saja
+WORKER_URL = "https://didinska-signal.mr-didinska21.workers.dev"
 
 # Harus SAMA PERSIS dengan secret MT5_BRIDGE_SECRET yang di-set di Worker
 # (npx wrangler secret put MT5_BRIDGE_SECRET).
-BRIDGE_SECRET = "isi-dengan-secret-yang-sama-seperti-di-worker"
+# ini juga adalah data akun demo, jadi biarkan saja ke isi jangan usik.
+BRIDGE_SECRET = "MT5_BRIDGE_SECRET"
 
 SYMBOL = "XAUUSD"  # sesuaikan kalau nama simbol di broker kamu beda (misal "XAUUSD.m", "GOLD", dll)
 
