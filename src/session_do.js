@@ -786,8 +786,50 @@ export function extractPriceAfterLabel(text, label, referencePrice = null) {
   return fallbackMatch ? parsePriceString(fallbackMatch[1]) : null;
 }
 
+/**
+ * Parse 1 angka harga dari potongan teks AI. Ada 2 gaya penulisan koma yang
+ * SAMA-SAMA muncul dari AI Penyimpul (yang nulis Bahasa Indonesia):
+ *   a) koma sebagai PEMISAH RIBUAN gaya Inggris, mis. "63,084" = 63084
+ *      (sudah ditangani & di-tes sejak awal, lihat test/session_do.test.js)
+ *   b) koma sebagai TITIK DESIMAL gaya Indonesia, mis. "4584,14" = 4584.14,
+ *      "1,5" = 1.5 (kasus nyata yang bikin Entry/SL/TP XAUUSD ke-parse jadi
+ *      "458414"/"15"/"1" — laporan user, screenshot Auto-Signal)
+ * Dua gaya ini SECARA KEBETULAN bisa dibedakan dari jumlah digit di
+ * belakang koma TERAKHIR: pemisah ribuan SELALU tepat 3 digit ("63,084"),
+ * sedangkan AI ini nulis desimal harga/rasio 1-2 digit ("4584,14", "1,5").
+ * Jadi: 3 digit di belakang koma -> ribuan (dibuang). Selain itu -> desimal
+ * (diganti titik). Kalau ada TITIK dan KOMA sekaligus (mis. "1,234.5" atau
+ * "4.584,14"), yang paling KANAN adalah desimal, sisanya ribuan (dibuang) —
+ * tidak butuh tebak-tebakan jumlah digit lagi karena sudah eksplisit dari
+ * urutannya. Kalau cuma titik (atau tanpa pemisah), dibiarkan apa adanya —
+ * parseFloat native sudah benar, dan JANGAN diotak-atik pakai heuristik
+ * jumlah-digit yang sama karena kripto lumrah punya harga 3+ desimal (mis.
+ * altcoin "0.523") yang BUKAN pemisah ribuan.
+ */
 function parsePriceString(raw) {
-  const cleaned = raw.replace(/\s/g, "").replace(/,/g, "");
+  let cleaned = raw.replace(/\s/g, "");
+  if (cleaned === "") return null;
+
+  const hasComma = cleaned.includes(",");
+  const hasDot = cleaned.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = cleaned.lastIndexOf(",");
+    const lastDot = cleaned.lastIndexOf(".");
+    cleaned =
+      lastComma > lastDot
+        ? cleaned.replace(/\./g, "").replace(",", ".") // "4.584,14" -> "4584.14"
+        : cleaned.replace(/,/g, ""); // "1,234.5" -> "1234.5"
+  } else if (hasComma) {
+    const lastComma = cleaned.lastIndexOf(",");
+    const digitsAfterLastComma = cleaned.length - lastComma - 1;
+    cleaned =
+      digitsAfterLastComma === 3
+        ? cleaned.replace(/,/g, "") // "63,084" -> "63084"
+        : cleaned.slice(0, lastComma).replace(/,/g, "") + "." + cleaned.slice(lastComma + 1); // "4584,14" -> "4584.14"
+  }
+  // Cuma titik / tidak ada pemisah sama sekali -> dibiarkan apa adanya.
+
   const num = parseFloat(cleaned);
   return Number.isFinite(num) ? num : null;
 }
