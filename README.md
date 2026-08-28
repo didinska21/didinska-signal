@@ -169,9 +169,11 @@ WAIT, tidak ada eksekusi sama sekali.
 
 Setup lengkap: lihat `mt5_bridge/README.md`.
 
-⚠️ Masih **demo only**, lot size fixed sederhana (belum position sizing
-berbasis risiko akun), dan bridge baru jalan lokal (laptop) — belum 24 jam
-via VPS.
+⚠️ Masih **demo only**, dan bridge baru jalan lokal (laptop) — belum 24 jam
+via VPS. Eksekusi **manual** (klik tombol Signal Trade) masih lot fixed
+sederhana (`MT5_DEFAULT_LOT`). Eksekusi **otonom** (`/auto XAUUSD`) sudah
+pakai position sizing dinamis berbasis % risiko akun — lihat bagian "Mode
+OTONOM" di bawah.
 
 ## Mode OTONOM (khusus XAUUSD) — trading tanpa pencet apa-apa
 
@@ -185,22 +187,50 @@ di Cloudflare (Settings → Variables and Secrets). Kalau tidak diisi/bukan
 persis "true", mode otonom TIDAK PERNAH eksekusi ke MT5 (siklus auto tetap
 jalan kirim sinyal teks doang, seperti sebelumnya).
 
+`/auto XAUUSD [scalping|daytrade|swing]` otomatis pakai mode **Lengkap (10
+AI)** — simbol kripto lain tetap **Cepat (5 AI)** buat siklus auto, biar
+tidak boros limit Groq API kalau dipakai ke banyak pair kripto sekaligus.
+
 3 lapis kontrol risiko yang otomatis aktif begitu saklar utama dinyalakan:
 1. **Maksimal 1 posisi terbuka** dalam satu waktu (khusus XAUUSD/bot ini) — sinyal baru ditolak selama masih ada posisi terbuka
 2. **Limit trade per hari** — default 5, atur lewat `MT5_MAX_TRADES_PER_DAY`
 3. **Circuit breaker rugi harian** — default 3% dari equity awal hari, atur lewat `MT5_MAX_DAILY_LOSS_PCT`. Kalau tersentuh, mode otonom berhenti eksekusi sampai hari berikutnya (UTC)
+
+Ditambah **position sizing dinamis berbasis % risiko** (khusus jalur
+otonom ini, bukan eksekusi manual): SL/TP tetap harga asli dari AI
+Penyimpul (native order MT5, jadi tetap jaring pengaman utama walau bridge
+Python mati) — tapi **lot dihitung ulang tiap entry** dari balance saat
+itu, supaya kalau SL asli kena, kerugian ≈ 1% balance (`RISK_SL_PCT` di
+`src/session_do.js`). Kalau lot hasil hitung di bawah lot minimum broker
+(modal terlalu kecil untuk jarak SL sinyal), eksekusi dibatalkan otomatis
+demi keamanan (bukan dipaksa pakai lot minimum).
+
+Sebagai lapisan **tambahan** (paralel, bukan pengganti native SL/TP):
+`mt5_bridge.py` juga memantau floating profit/rugi posisi tiap siklus
+polling, dan force-close otomatis begitu floating menyentuh
+**+2%/-1% dari balance** (`FORCE_CLOSE_PROFIT_PCT`/`FORCE_CLOSE_LOSS_PCT` di
+`mt5_bridge.py`) — SEBELUM harga sempat sampai ke level SL/TP asli sinyal
+(berguna terutama di sisi profit, karena TP asli AI bisa saja jauh lebih
+jauh dari 2%). Siapa pun yang kena duluan (native price-based, atau
+floating %-based ini) yang menutup posisi.
 
 Semua kontrol ini butuh `mt5_bridge.py` versi terbaru (ada fungsi
 `report_account_status()` yang lapor balance/equity/posisi tiap siklus
 push). Kalau bridge belum lapor status sama sekali (misal baru start),
 mode otonom otomatis menolak eksekusi sampai ada laporan status pertama.
 
-Trading kripto (BTCUSDT dll) TIDAK terpengaruh fitur ini — mode otonom
+Selama masih ada posisi terbuka, siklus auto XAUUSD **skip analisa AI sama
+sekali** (tidak ambil data pasar, tidak panggil AI) tiap 10 menit berikutnya
+— baru jalan normal lagi begitu posisi sudah tertutup (native SL/TP,
+force-close %, atau manual). Ini hemat limit API Groq karena toh sinyal
+baru bakal ditolak guardrail "1 posisi" juga.
+
+Trading kripto (BTCUSDT dll) TIDAK terpengaruh fitur-fitur ini — semuanya
 cuma berlaku untuk XAUUSD/MT5.
 
 ## Roadmap berikutnya
 - [ ] Pindahkan MT5 bridge dari laptop ke VPS supaya jalan 24 jam
-- [ ] Position sizing berbasis % risiko akun (bukan lot fixed)
+- [x] Position sizing berbasis % risiko akun (bukan lot fixed) — sudah jalan untuk jalur OTONOM XAUUSD, lihat bagian "Mode OTONOM" di atas. Eksekusi manual masih lot fixed.
 - [ ] Fungsi Jadwal News (FOMC/NFP/PPI/CPI) — ambil data kalender ekonomi real
 - [ ] Kemungkinan fitur tambahan lain (menyusul)
 
