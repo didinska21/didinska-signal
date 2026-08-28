@@ -129,19 +129,27 @@ async function handleMessage(env, message) {
       );
     }
 
-    await startAutoSignal(env, chatId, { symbol, tradeMode, aiMode: "cepat" });
+    // Jumlah AI khusus /auto: XAUUSD (data dari MT5 bridge) pakai mode
+    // "Lengkap" (10 AI spesialis), simbol lain (kripto, dari Binance/Bybit)
+    // tetap "Cepat" (5 AI) -- siklus auto jalan tiap 10 menit terus-menerus,
+    // jadi 10 AI untuk SEMUA simbol akan boros limit Groq API kalau dipakai
+    // ke banyak pair kripto sekaligus.
+    const aiMode = isMt5Symbol(symbol) ? "lengkap" : "cepat";
+
+    await startAutoSignal(env, chatId, { symbol, tradeMode, aiMode });
 
     const modeLabel = TRADE_MODES[tradeMode]?.label || tradeMode;
+    const aiCountLabel = aiMode === "lengkap" ? "10 AI" : "5 AI";
     await sendMessage(
       env,
       chatId,
       `🤖 <b>Auto-Signal AKTIF</b>
 
-Bot bakal otomatis analisis <b>${escapeHtml(symbol)}</b> (mode ${escapeHtml(modeLabel)}, 5 AI) tiap <b>10 menit</b>, dan otomatis ngecek TP/SL sinyal sebelumnya terhadap harga terkini.${
+Bot bakal otomatis analisis <b>${escapeHtml(symbol)}</b> (mode ${escapeHtml(modeLabel)}, ${aiCountLabel}) tiap <b>10 menit</b>, dan otomatis ngecek TP/SL sinyal sebelumnya terhadap harga terkini.${
         isMt5Symbol(symbol)
           ? `\n\n${
               env.MT5_AUTONOMOUS_XAUUSD === "true"
-                ? "🔓 Mode OTONOM aktif untuk simbol ini — sinyal BUY/SELL akan otomatis dieksekusi ke MT5 (dengan 3 kontrol risiko: 1 posisi terbuka, limit trade/hari, circuit breaker rugi harian)."
+                ? "🔓 Mode OTONOM aktif untuk simbol ini — sinyal BUY/SELL akan otomatis dieksekusi ke MT5 (dengan 3 kontrol risiko: 1 posisi terbuka, limit trade/hari, circuit breaker rugi harian).\n📐 Lot dihitung otomatis tiap entry supaya risiko ke SL asli ≈ 1% balance, plus lapisan tambahan: force-close otomatis kalau floating profit/rugi duluan nyentuh +2%/-1% balance sebelum harga sampai ke level SL/TP asli sinyal.\n⏭️ Siklus auto otomatis di-skip (tanpa panggil AI) selama masih ada posisi terbuka, biar hemat limit API."
                 : "🔒 Mode otonom BELUM aktif (env MT5_AUTONOMOUS_XAUUSD belum \"true\") — bot cuma kirim sinyal teks, TIDAK eksekusi ke MT5."
             }`
           : ""
