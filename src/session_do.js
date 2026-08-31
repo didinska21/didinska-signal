@@ -20,7 +20,7 @@ import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
 import { buildMarketDataPackage } from "./marketData.js";
 import { fetchCurrentPrice, isMt5Symbol } from "./marketSource.js";
 import { buildSignalChartImage } from "./ChartImage.js";
-import { enqueueMt5Execution, checkMt5AutonomousGuardrails, getMt5RiskSnapshot } from "./mt5Exec.js";
+import { enqueueMt5Execution, checkMt5AutonomousGuardrails, getMt5RiskSnapshot, checkMt5LayerGuardrails, getMt5LayerSnapshot } from "./mt5Exec.js";
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
@@ -90,6 +90,24 @@ function calcRiskBasedLot(balance, entryPrice, slPrice) {
 
   return { lot, slDistance, riskAmount };
 }
+
+// --- Strategi 2: sampai MAX_LAYERS posisi INDEPENDEN sekaligus (bukan cuma
+// 1), market order MURNI (TANPA native SL/TP -- keputusan sadar user,
+// artinya posisi ini 100% bergantung bridge Python nyala & polling normal,
+// tidak ada jaring pengaman di level broker). Tiap layer auto-close SENDIRI
+// (tidak saling terkait) begitu floating-nya nyentuh +LAYER_TP_USD atau
+// -LAYER_SL_USD -- FLAT dollar, BUKAN % dari balance seperti Strategi 1.
+// TIDAK ada limit trade/hari atau circuit breaker rugi harian (beda dari
+// Strategi 1), sesuai permintaan eksplisit user. Semua angka ini HARUS
+// sinkron dengan mt5_bridge.py (MAGIC_NUMBER_LAYER/LAYER_TP_USD/
+// LAYER_SL_USD) & mt5_bridge_do.js (MAX_LAYERS) -- kalau salah satu diubah,
+// ubah juga yang lain.
+const MAX_LAYERS = 10;
+const LAYER_TP_USD = 2;
+const LAYER_SL_USD = 1;
+// Lot FIXED sama untuk semua layer (bukan dihitung dari % risiko seperti
+// Strategi 1) -- bisa dioverride lewat env var MT5_LAYER_LOT.
+const DEFAULT_LAYER_LOT = 0.01;
 
 export class SessionDO {
   constructor(state, env) {
@@ -213,10 +231,10 @@ export class SessionDO {
       }
 
       case "startAuto": {
-        const { chatId, symbol, tradeMode, aiMode } = await request.json();
+        const { chatId, symbol, tradeMode, aiMode, strategy } = await request.json();
         await this.storage.put("autoMode", true);
         await this.storage.put("autoChatId", chatId);
-        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode, strategy: strategy || "s1" });
         const job = await this.storage.get("job");
         if (!job) await this.storage.setAlarm(Date.now());
         return Response.json({ ok: true });
@@ -279,7 +297,7 @@ export class SessionDO {
       return;
     }
 
-    const { chatId, messageId, aiMode, tradeMode, symbol, photos, dataPackage, step, opinions } = job;
+    const { chatId, messageId, aiMode, tradeMode, symbol, photos, dataPackage, step, opinions, strategy } = job;
     const analystsList = getAnalystsForMode(aiMode);
 
     try {
@@ -388,6 +406,41 @@ export class SessionDO {
         //       dan SEMUA itu hanya jalan kalau saklar MT5_AUTONOMOUS_XAUUSD
         //       di env di-set eksplisit ke "true".
         if (isMt5Symbol(symbol) && (!job.isAuto || AUTONOMOUS_XAUUSD_ENABLED(this.env))) {
+          if (job.isAuto && strategy === "s2") {
+            // --- Strategi 2: TIDAK butuh Entry/SL/TP sama sekali (levelnya
+            // di teks AI cuma informasi teknikal) -- decision BUY/SELL saja
+            // sudah cukup buat market order. TIDAK ada invalidReason gate
+            // seperti Strategi 1/manual karena tidak ada harga yang perlu
+            // divalidasi urutannya.
+            const layerGuard = await checkMt5LayerGuardrails(this.env, symbol);
+
+            if (!layerGuard.allowed) {
+              await sendMessage(
+                this.env,
+                chatId,
+                `🧱⛔ Sinyal ${decision} (Strategi 2) TIDAK dieksekusi: ${escapeHtml(layerGuard.reason)}`
+              );
+            } else {
+              const lot = Number(this.env.MT5_LAYER_LOT) || DEFAULT_LAYER_LOT;
+              try {
+                await enqueueMt5Execution(this.env, symbol, {
+                  signalId,
+                  chatId,
+                  decision,
+                  strategy: "s2",
+                  lot,
+                });
+                await sendMessage(
+                  this.env,
+                  chatId,
+                  `🧱🔗 Sinyal ${decision} (Strategi 2, Layer) sudah diantre ke MT5 bridge.\nLot: ${lot} (fixed). Market order MURNI (tanpa native SL/TP) — layer ini auto-close SENDIRI begitu floating nyentuh +$${LAYER_TP_USD} (TP) atau -$${LAYER_SL_USD} (SL), dipantau bridge Python.\nLayer aktif setelah ini: ${layerGuard.openLayerCount + 1}/${MAX_LAYERS}.`
+                );
+              } catch (err) {
+                console.error("Gagal antre eksekusi MT5 (layer):", err);
+                await sendMessage(this.env, chatId, `⚠️ Strategi 2 gagal antre eksekusi MT5: ${escapeHtml(err.message)}`);
+              }
+            }
+          } else {
           const invalidReason =
             entryPrice == null || slPrice == null || tpPrice == null
               ? "Entry/SL/TP gagal terbaca lengkap dari teks AI Penyimpul"
@@ -481,6 +534,7 @@ export class SessionDO {
               );
             }
           }
+          }
         }
       }
 
@@ -546,7 +600,7 @@ export class SessionDO {
 
       const autoMode = await this.storage.get("autoMode");
       if (autoMode) {
-        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode, strategy });
         await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
       }
     } catch (err) {
@@ -563,13 +617,13 @@ export class SessionDO {
 
       const autoMode = await this.storage.get("autoMode");
       if (autoMode) {
-        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode, strategy });
         await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
       }
     }
   }
 
-  async runAutoCycle({ symbol, tradeMode, aiMode }) {
+  async runAutoCycle({ symbol, tradeMode, aiMode, strategy }) {
     const stillAuto = await this.storage.get("autoMode");
     if (!stillAuto) return;
 
@@ -579,20 +633,24 @@ export class SessionDO {
     await this.checkOpenSignalsAgainstPrice(symbol, chatId);
 
     // --- Skip siklus (TANPA ambil data pasar / panggil AI sama sekali)
-    // kalau MASIH ADA posisi MT5 terbuka dari bot ini (khusus simbol MT5,
-    // misal XAUUSD) -- toh selama posisi masih terbuka, guardrail "1
-    // posisi" bakal nolak eksekusi baru juga nanti; jadi analisa 10 AI +
-    // generate sinyal sekarang cuma buang-buang limit API Groq. Dicek pakai
-    // getMt5RiskSnapshot (read-only, TIDAK increment counter trade harian,
-    // beda dengan checkAutonomousGuardrails). Diam saja kalau di-skip (tidak
-    // kirim notifikasi tiap 10 menit ke Telegram) supaya tidak spam --
-    // cukup dijadwalkan ulang seperti siklus normal.
+    // kalau kondisi MT5 sudah "penuh" -- toh sinyal barunya bakal ditolak
+    // guardrail juga nanti; jadi analisa AI + generate sinyal sekarang cuma
+    // buang-buang limit API Groq. Beda syarat per strategi:
+    //   Strategi 2: sudah pas MAX_LAYERS layer terbuka.
+    //   Strategi 1 (default): masih ada 1 posisi terbuka.
+    // Dicek pakai snapshot read-only (TIDAK increment counter apa pun).
+    // Diam saja kalau di-skip (tidak kirim notifikasi tiap 10 menit ke
+    // Telegram) supaya tidak spam -- cukup dijadwalkan ulang seperti biasa.
     if (isMt5Symbol(symbol)) {
-      const snapshot = await getMt5RiskSnapshot(this.env, symbol);
-      if (snapshot.openPositionTicket) {
+      const isLayerStrategy = strategy === "s2";
+      const full = isLayerStrategy
+        ? (await getMt5LayerSnapshot(this.env, symbol)).openLayerCount >= MAX_LAYERS
+        : Boolean((await getMt5RiskSnapshot(this.env, symbol)).openPositionTicket);
+
+      if (full) {
         const stillAutoAfterSkip = await this.storage.get("autoMode");
         if (stillAutoAfterSkip) {
-          await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+          await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode, strategy });
           await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
         }
         return;
@@ -615,6 +673,7 @@ export class SessionDO {
         step: 0,
         opinions: [],
         isAuto: true,
+        strategy: strategy || "s1",
       });
       await this.storage.put("mode", "processing");
       await this.storage.setAlarm(Date.now());
@@ -627,7 +686,7 @@ export class SessionDO {
       );
       const stillAutoAfterFail = await this.storage.get("autoMode");
       if (stillAutoAfterFail) {
-        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode });
+        await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode, strategy });
         await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
       }
     }

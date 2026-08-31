@@ -115,11 +115,12 @@ export async function startAnalysis(env, chatId, messageId, dataPackage) {
   });
 }
 
-/** Nyalain auto-signal (dipicu /auto): analisis otomatis berulang tiap 10 menit */
-export async function startAutoSignal(env, chatId, { symbol, tradeMode, aiMode }) {
+/** Nyalain auto-signal (dipicu /auto, atau tombol Strategi 1/2): analisis otomatis berulang tiap 10 menit.
+ * `strategy`: "s1" (default, posisi tunggal) atau "s2" (10 layer independen, market order + $ flat). */
+export async function startAutoSignal(env, chatId, { symbol, tradeMode, aiMode, strategy = "s1" }) {
   await getStub(env, chatId).fetch("https://session/startAuto", {
     method: "POST",
-    body: JSON.stringify({ chatId, symbol, tradeMode, aiMode }),
+    body: JSON.stringify({ chatId, symbol, tradeMode, aiMode, strategy }),
   });
 }
 

@@ -119,6 +119,47 @@ export function tradeModeKeyboard() {
   };
 }
 
+// --- Keyboard PERMANEN (ReplyKeyboardMarkup, nempel di atas kolom ketik,
+// BEDA dari semua keyboard lain di file ini yang nempel per-pesan/inline)
+// buat pilih Strategi 1 (posisi tunggal, native SL/TP, lot % risiko) vs
+// Strategi 2 (sampai 10 layer independen, market order murni, TP $2/SL $1
+// flat per layer). Keduanya SALING EKSKLUSIF — mulai salah satu otomatis
+// mengganti siklus auto yang lain (lihat startAuto di session_do.js).
+// Ditampilkan lewat sendMessage(..., strategyReplyKeyboard()), bukan
+// editMessageReplyMarkup, karena ReplyKeyboardMarkup cuma bisa dikirim
+// nempel ke pesan BARU, tidak bisa "ditempelkan" ke pesan lama.
+export function strategyReplyKeyboard() {
+  return {
+    keyboard: [
+      [{ text: "🧭 Strategi 1 (XAUUSD)" }, { text: "🧱 Strategi 2 (10 Layer)" }],
+      [{ text: "⏹️ Stop Auto" }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+export const STRATEGY_KEYBOARD_INTRO_TEXT = `👇 Keyboard strategi XAUUSD nempel permanen di bawah kolom ketik.
+
+🧭 <b>Strategi 1</b> — 1 posisi, native SL/TP dari AI, lot dihitung otomatis (risiko ≈1% balance ke SL).
+🧱 <b>Strategi 2</b> — sampai 10 layer independen, market order murni (tanpa native SL/TP), tiap layer auto-close sendiri di floating +$2/-$1.
+
+Cuma 1 yang aktif dalam satu waktu — pilih salah satu tombol di bawah kapan aja buat mulai (otomatis gantiin yang lain kalau ada yang lagi jalan).`;
+
+// --- Pilih mode trading (Scalping/Day Trade/Swing) KHUSUS setelah pilih
+// Strategi 1/2 lewat keyboard permanen di atas. callback_data SENGAJA beda
+// dari tradeModeKeyboard() punya "Signal Trade" manual (mode_...) supaya
+// dua alur ini tidak pernah ketuker, meski keliatan mirip.
+export function autoTradeModeKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: TRADE_MODES.scalping.label, callback_data: "auto_scalping" }],
+      [{ text: TRADE_MODES.daytrade.label, callback_data: "auto_daytrade" }],
+      [{ text: TRADE_MODES.swing.label, callback_data: "auto_swing" }],
+    ],
+  };
+}
+
 // --- Input simbol/pair trading ---
 export function symbolPromptText(tradeModeKey) {
   const mode = TRADE_MODES[tradeModeKey];
