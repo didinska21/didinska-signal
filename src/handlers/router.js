@@ -3,7 +3,6 @@ import {
   editMessageText,
   editMessageReplyMarkup,
   answerCallbackQuery,
-  clearOldReplyKeyboard,
 } from "../telegram.js";
 import {
   MAIN_MENU_TEXT,
@@ -24,6 +23,9 @@ import {
   MAX_CHART_PHOTOS,
   riwayatStatsText,
   TRADE_MODES,
+  strategyReplyKeyboard,
+  STRATEGY_KEYBOARD_INTRO_TEXT,
+  autoTradeModeKeyboard,
 } from "../menus.js";
 import { listSignals, markSignalResult, summarizeSignalStats } from "../signalLog.js";
 import { formatNewsScheduleText, formatUpcomingAllText } from "../newsScheduleFormat.js";
@@ -91,8 +93,11 @@ async function handleMessage(env, message) {
   if (text === "/start") {
     const oldPhotoPromptMsgId = await resetSession(env, chatId);
     if (oldPhotoPromptMsgId) await editMessageReplyMarkup(env, chatId, oldPhotoPromptMsgId);
-    await clearOldReplyKeyboard(env, chatId);
     await sendMessage(env, chatId, MAIN_MENU_TEXT, mainMenuKeyboard());
+    // Keyboard permanen (nempel di atas kolom ketik) buat pilih Strategi
+    // 1/2 XAUUSD kapan aja -- kirim ulang tiap /start supaya kalau
+    // sebelumnya sempat hilang/ke-dismiss, gampang dipanggil balik.
+    await sendMessage(env, chatId, STRATEGY_KEYBOARD_INTRO_TEXT, strategyReplyKeyboard());
     return;
   }
 
@@ -100,6 +105,36 @@ async function handleMessage(env, message) {
     const oldPhotoPromptMsgId = await resetSession(env, chatId); // ini juga membatalkan proses AI kalau sedang berjalan
     if (oldPhotoPromptMsgId) await editMessageReplyMarkup(env, chatId, oldPhotoPromptMsgId);
     await sendMessage(env, chatId, "❌ Dibatalkan. Kembali ke menu utama.", mainMenuKeyboard());
+    return;
+  }
+
+  // --- Tombol keyboard permanen: pilih Strategi 1/2 (XAUUSD). Reply
+  // keyboard cuma bisa kirim TEKS persis label tombolnya, jadi dicocokkan
+  // sebagai teks biasa, bukan callback_data. Lanjut ke pilih trade mode
+  // (inline) dulu sebelum benar-benar mulai siklus auto.
+  if (text === "🧭 Strategi 1 (XAUUSD)" || text === "🧱 Strategi 2 (10 Layer)") {
+    const isS2 = text === "🧱 Strategi 2 (10 Layer)";
+    await setMode(env, chatId, isS2 ? "choosing_auto_trademode_s2" : "choosing_auto_trademode_s1");
+    await sendMessage(
+      env,
+      chatId,
+      `${isS2 ? "🧱 <b>Strategi 2 (10 Layer)</b>" : "🧭 <b>Strategi 1</b>"} — XAUUSD\n\nPilih mode trading buat siklus analisanya:`,
+      autoTradeModeKeyboard()
+    );
+    return;
+  }
+
+  // --- Alias tombol "Stop Auto" di keyboard permanen -> sama seperti /stop_auto ---
+  if (text === "⏹️ Stop Auto") {
+    const wasOn = await getAutoMode(env, chatId);
+    await stopAutoSignal(env, chatId);
+    await sendMessage(
+      env,
+      chatId,
+      wasOn
+        ? "⏹️ Auto-signal dihentikan."
+        : "Auto-signal emang lagi nggak aktif kok, tapi udah dipastikan mati ya 👍"
+    );
     return;
   }
 
@@ -202,6 +237,12 @@ Ketik /stop_auto buat berhenti kapan aja.`
     return;
   }
 
+  // --- Mode: sedang pilih trade mode buat Strategi 1/2, tapi user malah kirim teks ---
+  if (mode === "choosing_auto_trademode_s1" || mode === "choosing_auto_trademode_s2") {
+    await sendMessage(env, chatId, "Silakan pilih mode trading lewat tombol di atas, atau ketik /batal.");
+    return;
+  }
+
   // --- Mode: sedang menunggu foto chart (khusus mode Lengkap, untuk AI Price Action) ---
   // Bisa terima lebih dari 1 foto (misal beda timeframe). Foto ditampung dulu,
   // analisis baru dijalankan setelah user tekan tombol "Analisa Sekarang".
@@ -267,6 +308,36 @@ async function handleCallbackQuery(env, callbackQuery) {
     await setTradeMode(env, chatId, tradeModeKey);
     await setMode(env, chatId, "awaiting_symbol");
     await editMessageText(env, chatId, messageId, symbolPromptText(tradeModeKey), symbolPromptKeyboard());
+    return;
+  }
+
+  // --- Pilih trade mode SETELAH tap tombol Strategi 1/2 di keyboard
+  // permanen (lihat "choosing_auto_trademode_s1/s2" di handleMessage).
+  // callback_data generik (auto_scalping dst) -- strategi mana yang
+  // dimaksud dibaca dari state `mode` sesi saat ini, BUKAN dari
+  // callback_data itu sendiri, supaya tidak perlu 6 variasi tombol.
+  if (data === "auto_scalping" || data === "auto_daytrade" || data === "auto_swing") {
+    const tradeMode = data.replace("auto_", "");
+    const currentMode = await getMode(env, chatId);
+    if (currentMode !== "choosing_auto_trademode_s1" && currentMode !== "choosing_auto_trademode_s2") return; // tombol basi
+
+    const strategy = currentMode === "choosing_auto_trademode_s2" ? "s2" : "s1";
+    await setMode(env, chatId, "idle");
+
+    // Strategi 2 selalu "cepat" (5 AI) -- siklus auto-nya berpotensi jauh
+    // lebih sering manggil AI dibanding Strategi 1 (S1 biasanya "diam"
+    // begitu 1 posisi kebuka; S2 tetap lanjut generate sinyal tiap 10
+    // menit selama belum pas 10 layer). Strategi 1 tetap "lengkap" (10 AI)
+    // seperti /auto XAUUSD biasa.
+    const aiMode = strategy === "s2" ? "cepat" : "lengkap";
+    await startAutoSignal(env, chatId, { symbol: "XAUUSD", tradeMode, aiMode, strategy });
+
+    const modeLabel = TRADE_MODES[tradeMode]?.label || tradeMode;
+    const text =
+      strategy === "s2"
+        ? `🧱 <b>Strategi 2 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 5 AI\n\nSampai 10 layer independen, market order MURNI (tanpa native SL/TP). Tiap layer auto-close SENDIRI di floating +$2 (TP)/-$1 (SL), dipantau bridge Python. Siklus di-skip otomatis (hemat API) begitu pas 10 layer terbuka.\n\n⚠️ Tanpa native SL/TP berarti posisi 100% bergantung bridge Python nyala terus.\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`
+        : `🧭 <b>Strategi 1 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 10 AI\n\n1 posisi, native SL/TP dari AI Penyimpul, lot dihitung otomatis (risiko ≈1% balance ke SL). Force-close tambahan di floating +2%/-1% balance.\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`;
+    await editMessageText(env, chatId, messageId, text);
     return;
   }
 
