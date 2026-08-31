@@ -61,11 +61,11 @@ except ImportError:
 
 # URL worker kamu, TANPA trailing slash. Contoh:
 # "https://didinska-signal.<subdomain-kamu>.workers.dev"
-WORKER_URL = "https://didinska-signal.YOUR-SUBDOMAIN.workers.dev"
+WORKER_URL = "https://didinska-signal.mr-didinska21.workers.dev"
 
 # Harus SAMA PERSIS dengan secret MT5_BRIDGE_SECRET yang di-set di Worker
 # (npx wrangler secret put MT5_BRIDGE_SECRET).
-BRIDGE_SECRET = "isi-dengan-secret-yang-sama-seperti-di-worker"
+BRIDGE_SECRET = "MT5_BRIDGE_SECRET"
 
 SYMBOL = "XAUUSD"  # sesuaikan kalau nama simbol di broker kamu beda (misal "XAUUSD.m", "GOLD", dll)
 
@@ -282,7 +282,15 @@ def poll_and_execute_signal():
         if not signal:
             return  # tidak ada sinyal baru, wajar & sering terjadi
 
-        log(f"📥 Sinyal baru diterima: {signal['decision']} entry~{signal['entry']} sl={signal['sl']} tp={signal['tp']}")
+        strategy = signal.get("strategy") or "s1"
+        if strategy == "s2":
+            # Strategi 2: market order murni, TIDAK ada entry/sl/tp dari Worker.
+            log(f"📥 Sinyal baru diterima (Strategi 2, layer): {signal.get('decision')} lot={signal.get('lot')}")
+        else:
+            log(
+                f"📥 Sinyal baru diterima: {signal.get('decision')} "
+                f"entry~{signal.get('entry')} sl={signal.get('sl')} tp={signal.get('tp')}"
+            )
         execute_order(signal)
     except Exception as err:
         log(f"⚠️ Error polling/eksekusi sinyal: {err}")
