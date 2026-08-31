@@ -19,6 +19,13 @@ CARA KERJA (loop terus-menerus sampai di-Ctrl+C):
      (lapor balik ke Worker juga, biar ada notifikasi Telegram). Jadi ada 2
      lapis proteksi paralel: siapa pun (native price-based SL/TP, atau
      floating %-based ini) yang kena duluan, itu yang menutup posisi.
+  4. STRATEGI 2 (opsional, dipicu tombol "Strategi 2" di Telegram): sampai
+     10 posisi INDEPENDEN sekaligus (magic number beda dari Strategi 1),
+     market order MURNI TANPA native SL/TP. Tiap siklus polling, cek
+     floating tiap layer -- begitu nyentuh +LAYER_TP_USD atau -LAYER_SL_USD
+     (flat dollar, BUKAN %), layer itu ditutup SENDIRI (tidak saling
+     terkait dengan layer lain). Karena tanpa native SL/TP, layer yang lagi
+     terbuka 100% bergantung script ini nyala & polling normal.
 
 CARA PAKAI:
   1. pip install -r requirements.txt
@@ -54,13 +61,11 @@ except ImportError:
 
 # URL worker kamu, TANPA trailing slash. Contoh:
 # "https://didinska-signal.<subdomain-kamu>.workers.dev"
-# data ini adalah akun demo jadi biarkan saja
-WORKER_URL = "https://didinska-signal.mr-didinska21.workers.dev"
+WORKER_URL = "https://didinska-signal.YOUR-SUBDOMAIN.workers.dev"
 
 # Harus SAMA PERSIS dengan secret MT5_BRIDGE_SECRET yang di-set di Worker
 # (npx wrangler secret put MT5_BRIDGE_SECRET).
-# ini juga adalah data akun demo, jadi biarkan saja ke isi jangan usik.
-BRIDGE_SECRET = "MT5_BRIDGE_SECRET"
+BRIDGE_SECRET = "isi-dengan-secret-yang-sama-seperti-di-worker"
 
 SYMBOL = "XAUUSD"  # sesuaikan kalau nama simbol di broker kamu beda (misal "XAUUSD.m", "GOLD", dll)
 
@@ -94,6 +99,17 @@ ORDER_COMMENT = "didinska-signal-bot"
 # risiko; kalau salah satu diubah, ubah juga yang satunya biar tetap match.
 FORCE_CLOSE_PROFIT_PCT = 2.0  # tutup paksa (profit lock) di floating +2% balance
 FORCE_CLOSE_LOSS_PCT = 1.0  # tutup paksa (cut loss) di floating -1% balance
+
+# --- Strategi 2: sampai 10 posisi INDEPENDEN sekaligus (magic number BEDA
+# dari Strategi 1, biar gampang dibedain & tidak saling ganggu), market
+# order MURNI (TANPA native SL/TP -- lihat execute_order()), tiap posisi
+# auto-close SENDIRI di floating FLAT dollar (BUKAN % balance kayak
+# Strategi 1). HARUS sinkron dengan RISK_SL_PCT dkk di src/session_do.js
+# (Worker) & MAX_LAYERS di src/mt5_bridge_do.js -- kalau salah satu diubah,
+# ubah juga yang lain.
+MAGIC_NUMBER_LAYER = 20260818
+LAYER_TP_USD = 2.0  # tutup paksa 1 layer di floating +$2
+LAYER_SL_USD = 1.0  # tutup paksa 1 layer di floating -$1
 
 # ============================================================================
 
@@ -188,8 +204,13 @@ def report_account_status():
     """
     Lapor balance/equity akun & apakah ada posisi terbuka (dari bot ini,
     dicek via MAGIC_NUMBER) ke Worker. Dipakai Worker buat 3 kontrol risiko
-    mode OTONOM: 1 posisi terbuka dalam satu waktu, limit trade/hari, dan
-    circuit breaker rugi harian. Dipanggil tiap siklus push candle.
+    mode OTONOM Strategi 1: 1 posisi terbuka dalam satu waktu, limit
+    trade/hari, dan circuit breaker rugi harian. Juga ikut lapor daftar
+    LENGKAP ticket layer Strategi 2 yang masih terbuka (magic ==
+    MAGIC_NUMBER_LAYER) -- Worker pakai ini buat sinkron ULANG (self-
+    healing) jumlah layer aktif, jaga-jaga kalau ada 1-2 event
+    reportExecution/reportForceClose yang kebetulan gagal terkirim.
+    Dipanggil tiap siklus push candle.
     """
     try:
         account_info = mt5.account_info()
@@ -199,10 +220,13 @@ def report_account_status():
 
         positions = mt5.positions_get(symbol=SYMBOL)
         open_ticket = None
+        layer_tickets = []
         if positions:
-            own_positions = [p for p in positions if p.magic == MAGIC_NUMBER]
-            if own_positions:
-                open_ticket = own_positions[0].ticket
+            for p in positions:
+                if p.magic == MAGIC_NUMBER and open_ticket is None:
+                    open_ticket = p.ticket
+                elif p.magic == MAGIC_NUMBER_LAYER:
+                    layer_tickets.append(p.ticket)
 
         requests.post(
             f"{WORKER_URL}/mt5-bridge/status",
@@ -211,6 +235,7 @@ def report_account_status():
                 "balance": account_info.balance,
                 "equity": account_info.equity,
                 "openPositionTicket": open_ticket,
+                "layerTickets": layer_tickets,
             },
             headers=HEADERS,
             timeout=15,
@@ -266,15 +291,15 @@ def poll_and_execute_signal():
 
 def execute_order(signal):
     decision = signal["decision"]
-    sl = float(signal["sl"])
-    tp = float(signal["tp"])
+    strategy = signal.get("strategy") or "s1"
+    is_layer = strategy == "s2"
     lot = float(signal.get("lot") or 0.01)
     signal_id = signal["signalId"]
     chat_id = signal.get("chatId")
 
     tick = mt5.symbol_info_tick(SYMBOL)
     if tick is None:
-        report_execution(signal_id, chat_id, "failed", message="Gagal ambil harga tick terkini dari MT5.")
+        report_execution(signal_id, chat_id, "failed", strategy=strategy, message="Gagal ambil harga tick terkini dari MT5.")
         return
 
     if decision == "BUY":
@@ -284,7 +309,7 @@ def execute_order(signal):
         order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
     else:
-        report_execution(signal_id, chat_id, "failed", message=f"Decision '{decision}' tidak valid untuk eksekusi (harus BUY/SELL).")
+        report_execution(signal_id, chat_id, "failed", strategy=strategy, message=f"Decision '{decision}' tidak valid untuk eksekusi (harus BUY/SELL).")
         return
 
     request_payload = {
@@ -293,20 +318,32 @@ def execute_order(signal):
         "volume": lot,
         "type": order_type,
         "price": price,
-        "sl": sl,
-        "tp": tp,
         "deviation": 20,  # slippage maksimal yang ditoleransi, dalam poin
-        "magic": MAGIC_NUMBER,
-        "comment": ORDER_COMMENT,
+        "magic": MAGIC_NUMBER_LAYER if is_layer else MAGIC_NUMBER,
+        "comment": f"{ORDER_COMMENT}-layer" if is_layer else ORDER_COMMENT,
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
+
+    # Strategi 1: native SL/TP dari AI Penyimpul, dikirim persis sebagai
+    # bagian order (jaring pengaman harga di level broker). Strategi 2:
+    # SENGAJA TIDAK ADA sl/tp sama sekali -- market order murni, keputusan
+    # sadar user, cuma dipantau floating $ flat (lihat
+    # check_and_force_close_layers()); posisi ini 100% bergantung script
+    # ini nyala & polling normal, tidak ada jaring pengaman broker.
+    if not is_layer:
+        sl = signal.get("sl")
+        tp = signal.get("tp")
+        if sl is not None:
+            request_payload["sl"] = float(sl)
+        if tp is not None:
+            request_payload["tp"] = float(tp)
 
     result = mt5.order_send(request_payload)
 
     if result is None:
         err = mt5.last_error()
-        report_execution(signal_id, chat_id, "failed", message=f"order_send mengembalikan None. last_error={err}")
+        report_execution(signal_id, chat_id, "failed", strategy=strategy, message=f"order_send mengembalikan None. last_error={err}")
         return
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -317,15 +354,16 @@ def execute_order(signal):
             signal_id,
             chat_id,
             "failed",
+            strategy=strategy,
             message=f"{reason} (retcode {result.retcode}, comment: {result.comment})",
         )
         return
 
-    log(f"✅ Order sukses. Ticket={result.order}, fill price={result.price}")
-    report_execution(signal_id, chat_id, "filled", ticket=result.order, fill_price=result.price)
+    log(f"✅ Order sukses ({'layer, Strategi 2' if is_layer else 'Strategi 1'}). Ticket={result.order}, fill price={result.price}")
+    report_execution(signal_id, chat_id, "filled", strategy=strategy, ticket=result.order, fill_price=result.price)
 
 
-def report_execution(signal_id, chat_id, status, ticket=None, fill_price=None, message=None):
+def report_execution(signal_id, chat_id, status, strategy="s1", ticket=None, fill_price=None, message=None):
     try:
         requests.post(
             f"{WORKER_URL}/mt5-bridge/execution",
@@ -334,6 +372,7 @@ def report_execution(signal_id, chat_id, status, ticket=None, fill_price=None, m
                 "signalId": signal_id,
                 "chatId": chat_id,
                 "status": status,
+                "strategy": strategy,
                 "ticket": ticket,
                 "fillPrice": fill_price,
                 "message": message,
@@ -381,8 +420,14 @@ def check_and_force_close():
         traceback.print_exc()
 
 
-def close_position(position, reason, profit_pct):
-    """Tutup 1 posisi (order berlawanan arah, volume sama) & lapor ke Worker."""
+def close_position(position, reason, profit_value, strategy="s1"):
+    """
+    Tutup 1 posisi (order berlawanan arah, volume sama) & lapor ke Worker.
+    `profit_value` maknanya beda per strategi: Strategi 1 = profit_pct (%
+    dari balance), Strategi 2 = profit_usd (floating $ flat) -- keduanya
+    sama-sama "floating saat ditutup", cuma satuannya beda.
+    """
+    is_layer = strategy == "s2"
     tick = mt5.symbol_info_tick(SYMBOL)
     if tick is None:
         log(f"⚠️ Gagal force-close ticket {position.ticket}: tidak bisa ambil tick harga terkini.")
@@ -400,7 +445,7 @@ def close_position(position, reason, profit_pct):
         "position": position.ticket,  # wajib diisi supaya MT5 tahu ini CLOSE, bukan order baru
         "price": price,
         "deviation": 20,
-        "magic": MAGIC_NUMBER,
+        "magic": MAGIC_NUMBER_LAYER if is_layer else MAGIC_NUMBER,
         "comment": f"force-close-{reason}",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
@@ -412,28 +457,38 @@ def close_position(position, reason, profit_pct):
         err = mt5.last_error()
         retcode = result.retcode if result else None
         reason_desc = describe_retcode(retcode) if retcode is not None else "order_send mengembalikan None"
+        safety_note = (
+            "TANPA native SL/TP (Strategi 2)" if is_layer else "native SL/TP masih jadi jaring pengaman"
+        )
         log(
             f"❌ Force-close ticket {position.ticket} GAGAL (retcode={retcode}, {reason_desc}, last_error={err}). "
-            f"Posisi TETAP TERBUKA -- native SL/TP masih jadi jaring pengaman, akan dicoba lagi siklus berikutnya."
+            f"Posisi TETAP TERBUKA -- {safety_note}, akan dicoba lagi siklus berikutnya."
         )
         return
 
-    label = "TP (profit lock)" if reason == "tp_pct" else "SL (cut loss)"
-    log(f"🔒 Force-close ticket {position.ticket} sukses -- {label} di floating {profit_pct:.2f}% balance. Harga tutup={result.price}")
-    report_force_close(position.ticket, reason, profit_pct, result.price, position.volume)
+    if is_layer:
+        label = "TP layer (+$2)" if reason == "layer_tp_usd" else "SL layer (-$1)"
+        log(f"🧱 Force-close LAYER ticket {position.ticket} sukses -- {label}, floating ${profit_value:.2f}. Harga tutup={result.price}")
+        report_force_close(position.ticket, reason, None, result.price, position.volume, strategy="s2", profit_usd=profit_value)
+    else:
+        label = "TP (profit lock)" if reason == "tp_pct" else "SL (cut loss)"
+        log(f"🔒 Force-close ticket {position.ticket} sukses -- {label} di floating {profit_value:.2f}% balance. Harga tutup={result.price}")
+        report_force_close(position.ticket, reason, profit_value, result.price, position.volume, strategy="s1", profit_usd=None)
 
 
-def report_force_close(ticket, reason, profit_pct, close_price, volume):
+def report_force_close(ticket, reason, profit_pct, close_price, volume, strategy="s1", profit_usd=None):
     try:
         requests.post(
             f"{WORKER_URL}/mt5-bridge/forceclose",
             json={
                 "symbol": SYMBOL,
                 "ticket": ticket,
-                "reason": reason,  # "tp_pct" | "sl_pct"
+                "reason": reason,  # "tp_pct" | "sl_pct" (S1) atau "layer_tp_usd" | "layer_sl_usd" (S2)
                 "profitPct": profit_pct,
+                "profitUsd": profit_usd,
                 "closePrice": close_price,
                 "volume": volume,
+                "strategy": strategy,
             },
             headers=HEADERS,
             timeout=15,
@@ -442,11 +497,44 @@ def report_force_close(ticket, reason, profit_pct, close_price, volume):
         log(f"⚠️ Gagal lapor force-close ke Worker: {err}")
 
 
+def check_and_force_close_layers():
+    """
+    Strategi 2: cek floating profit/rugi TIAP posisi layer (magic ==
+    MAGIC_NUMBER_LAYER) SECARA INDEPENDEN satu sama lain -- beda dari
+    check_and_force_close() yang basisnya % dari balance, ini FLAT dollar
+    (LAYER_TP_USD/LAYER_SL_USD) dan TIDAK peduli balance sama sekali.
+
+    Posisi layer TIDAK punya native SL/TP di order-nya (lihat
+    execute_order()), jadi fungsi ini SATU-SATUNYA yang bisa menutup posisi
+    layer -- kalau script ini berhenti/disconnect, layer yang lagi terbuka
+    TIDAK punya jaring pengaman apa pun di level broker sampai script ini
+    nyala lagi.
+
+    Dipanggil tiap siklus polling (POLL_INTERVAL_SEC), sama seperti
+    check_and_force_close() dan poll_and_execute_signal().
+    """
+    try:
+        positions = mt5.positions_get(symbol=SYMBOL)
+        if not positions:
+            return
+        own_layers = [p for p in positions if p.magic == MAGIC_NUMBER_LAYER]
+
+        for position in own_layers:
+            if position.profit >= LAYER_TP_USD:
+                close_position(position, "layer_tp_usd", position.profit, strategy="s2")
+            elif position.profit <= -LAYER_SL_USD:
+                close_position(position, "layer_sl_usd", position.profit, strategy="s2")
+    except Exception as err:
+        log(f"⚠️ Error cek force-close layer: {err}")
+        traceback.print_exc()
+
+
 def main():
     log("Menghubungkan ke MT5...")
     connect_mt5()
     log(f"Bridge aktif untuk simbol {SYMBOL}. Push tiap {PUSH_INTERVAL_SEC}s, polling sinyal tiap {POLL_INTERVAL_SEC}s.")
-    log(f"Force-close otomatis aktif: +{FORCE_CLOSE_PROFIT_PCT}% (profit lock) / -{FORCE_CLOSE_LOSS_PCT}% (cut loss) dari balance.")
+    log(f"Strategi 1 -- force-close otomatis: +{FORCE_CLOSE_PROFIT_PCT}% (profit lock) / -{FORCE_CLOSE_LOSS_PCT}% (cut loss) dari balance.")
+    log(f"Strategi 2 -- sampai 10 layer independen, force-close per layer: +${LAYER_TP_USD} / -${LAYER_SL_USD} flat (tanpa native SL/TP).")
     log("Biarkan jendela ini tetap terbuka. Tekan Ctrl+C untuk berhenti.")
 
     last_push = 0
@@ -459,6 +547,7 @@ def main():
                 last_push = now
 
             check_and_force_close()
+            check_and_force_close_layers()
             poll_and_execute_signal()
             time.sleep(POLL_INTERVAL_SEC)
     except KeyboardInterrupt:
