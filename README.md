@@ -169,11 +169,14 @@ WAIT, tidak ada eksekusi sama sekali.
 
 Setup lengkap: lihat `mt5_bridge/README.md`.
 
-⚠️ Masih **demo only**, dan bridge baru jalan lokal (laptop) — belum 24 jam
-via VPS. Eksekusi **manual** (klik tombol Signal Trade) masih lot fixed
-sederhana (`MT5_DEFAULT_LOT`). Eksekusi **otonom** (`/auto XAUUSD`) sudah
-pakai position sizing dinamis berbasis % risiko akun — lihat bagian "Mode
-OTONOM" di bawah.
+⚠️ Masih **demo only**. Bridge sekarang jalan 24/7 di VPS Windows. Eksekusi
+**manual** (klik tombol Signal Trade) masih lot fixed sederhana
+(`MT5_DEFAULT_LOT`). Eksekusi **Strategi 1** (`/auto XAUUSD` atau tombol
+keyboard) sudah pakai position sizing dinamis berbasis % risiko akun & tetap
+punya native SL/TP di broker. Eksekusi **Strategi 2** (tombol keyboard, 10
+layer) pakai lot fixed & **TIDAK punya native SL/TP sama sekali** — kalau
+bridge mati, layer yang lagi terbuka tidak terlindungi apa pun sampai bridge
+nyala lagi. Lihat bagian "Mode OTONOM" & "Strategi 2" di bawah.
 
 ## Mode OTONOM (khusus XAUUSD) — trading tanpa pencet apa-apa
 
@@ -228,8 +231,44 @@ baru bakal ditolak guardrail "1 posisi" juga.
 Trading kripto (BTCUSDT dll) TIDAK terpengaruh fitur-fitur ini — semuanya
 cuma berlaku untuk XAUUSD/MT5.
 
+### Strategi 2 — 10 Layer Independen (opsional, saling eksklusif dengan Strategi 1)
+
+Dipicu lewat keyboard PERMANEN (nempel di atas kolom ketik Telegram, kirim
+`/start` buat memunculkannya) — bukan lewat command teks seperti Strategi 1.
+Tap tombol "🧭 Strategi 1" / "🧱 Strategi 2" lalu pilih trade mode, sistem
+otomatis mulai siklus auto yang sesuai. **Cuma 1 yang aktif dalam satu
+waktu** — mulai salah satu otomatis mengganti siklus auto yang lain (posisi
+yang KEBETULAN sudah terbuka dari strategi lama TIDAK dipaksa tutup, tetap
+dipantau/berjalan sampai closenya sendiri).
+
+Beda mendasar dari Strategi 1:
+- Sampai **10 posisi independen** sekaligus (bukan cuma 1) — tiap posisi
+  ("layer") tidak saling terkait dengan layer lain.
+- **Market order MURNI, TANPA native SL/TP sama sekali.** Ini keputusan
+  sadar demi kesederhanaan — konsekuensinya, layer yang terbuka **100%
+  bergantung bridge Python nyala & polling normal**; tidak ada jaring
+  pengaman di level broker seperti Strategi 1.
+- Tiap layer auto-close **sendiri-sendiri** (independen) begitu floating-nya
+  sendiri menyentuh **+$2 (TP)** atau **-$1 (SL)** — FLAT dollar, BUKAN %
+  dari balance seperti Strategi 1. Diatur lewat `LAYER_TP_USD`/
+  `LAYER_SL_USD` di `mt5_bridge.py`.
+- Lot **FIXED** sama untuk semua layer (default 0.01, env var
+  `MT5_LAYER_LOT`) — bukan dihitung dari % risiko.
+- **TIDAK ADA** limit trade harian atau circuit breaker rugi harian (beda
+  dari Strategi 1) — sesuai permintaan eksplisit, murni berbasis TP $2/SL $1
+  per layer.
+- Mode AI auto selalu **Cepat (5 AI)** — trade mode (Scalping/Day/Swing)
+  tetap dipilih user lewat tombol.
+- Siklus auto skip otomatis (tanpa panggil AI) begitu sudah pas 10 layer
+  terbuka, hemat limit API Groq — sama seperti Strategi 1.
+
+Semua angka Strategi 2 (MAX_LAYERS, LAYER_TP_USD, LAYER_SL_USD,
+MAGIC_NUMBER_LAYER) tersebar di 3 file (`src/session_do.js`,
+`src/mt5_bridge_do.js`, `mt5_bridge/mt5_bridge.py`) — kalau mau ubah salah
+satu angka, ubah di ketiganya biar tetap sinkron.
+
 ## Roadmap berikutnya
-- [ ] Pindahkan MT5 bridge dari laptop ke VPS supaya jalan 24 jam
+- [x] Pindahkan MT5 bridge dari laptop ke VPS supaya jalan 24 jam — sudah pakai VPS Windows 24/7
 - [x] Position sizing berbasis % risiko akun (bukan lot fixed) — sudah jalan untuk jalur OTONOM XAUUSD, lihat bagian "Mode OTONOM" di atas. Eksekusi manual masih lot fixed.
 - [ ] Fungsi Jadwal News (FOMC/NFP/PPI/CPI) — ambil data kalender ekonomi real
 - [ ] Kemungkinan fitur tambahan lain (menyusul)
