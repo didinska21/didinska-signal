@@ -24,6 +24,14 @@ import { enqueueMt5Execution, checkMt5AutonomousGuardrails, getMt5RiskSnapshot, 
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
 
+// Strategi 2 saja: begitu 1 layer BERHASIL entry, langsung coba buka layer
+// berikutnya cepat (bukan nunggu AUTO_INTERVAL_MS/10 menit) -- supaya kalau
+// user memang mau "ngebut" sampai 10 layer, tidak nunggu lama antar layer.
+// Kalau siklus barusan WAIT (tidak entry) atau layer sudah penuh (10/10),
+// tetap balik ke jeda normal AUTO_INTERVAL_MS (hindari buang-buang limit API
+// AI percuma nge-generate sinyal padahal tidak akan dieksekusi).
+const AUTO_INTERVAL_LAYER_MS = 30 * 1000; // 30 detik
+
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
 
 // Lot default untuk eksekusi MANUAL ke MT5 (demo) — dipakai waktu user
@@ -300,6 +308,12 @@ export class SessionDO {
     const { chatId, messageId, aiMode, tradeMode, symbol, photos, dataPackage, step, opinions, strategy } = job;
     const analystsList = getAnalystsForMode(aiMode);
 
+    // Strategi 2 saja: jadi true kalau siklus INI berhasil buka 1 layer baru
+    // ke MT5 bridge -- dipakai buat mempercepat jeda ke siklus berikutnya
+    // (lihat AUTO_INTERVAL_LAYER_MS), supaya langsung lanjut coba layer
+    // berikutnya sampai benar-benar 10/10, bukan nunggu 10 menit tiap layer.
+    let layerJustEntered = false;
+
     try {
       if (step < analystsList.length) {
         const analyst = analystsList[step];
@@ -430,10 +444,11 @@ export class SessionDO {
                   strategy: "s2",
                   lot,
                 });
+                layerJustEntered = true;
                 await sendMessage(
                   this.env,
                   chatId,
-                  `🧱🔗 Sinyal ${decision} (Strategi 2, Layer) sudah diantre ke MT5 bridge.\nLot: ${lot} (fixed). Market order MURNI (tanpa native SL/TP) — layer ini auto-close SENDIRI begitu floating nyentuh +$${LAYER_TP_USD} (TP) atau -$${LAYER_SL_USD} (SL), dipantau bridge Python.\nLayer aktif setelah ini: ${layerGuard.openLayerCount + 1}/${MAX_LAYERS}.`
+                  `🧱🔗 Sinyal ${decision} (Strategi 2, Layer) sudah diantre ke MT5 bridge.\nLot: ${lot} (fixed). Market order MURNI (tanpa native SL/TP) — layer ini auto-close SENDIRI begitu floating nyentuh +$${LAYER_TP_USD} (TP) atau -$${LAYER_SL_USD} (SL), dipantau bridge Python.\nLayer aktif setelah ini: ${layerGuard.openLayerCount + 1}/${MAX_LAYERS}.\n⚡ Layer berikutnya akan langsung dicoba lagi dalam ${AUTO_INTERVAL_LAYER_MS / 1000} detik (bukan nunggu 10 menit).`
                 );
               } catch (err) {
                 console.error("Gagal antre eksekusi MT5 (layer):", err);
@@ -601,7 +616,8 @@ export class SessionDO {
       const autoMode = await this.storage.get("autoMode");
       if (autoMode) {
         await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode, strategy });
-        await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
+        const nextDelay = strategy === "s2" && layerJustEntered ? AUTO_INTERVAL_LAYER_MS : AUTO_INTERVAL_MS;
+        await this.storage.setAlarm(Date.now() + nextDelay);
       }
     } catch (err) {
       console.error("Analysis alarm error:", err);
