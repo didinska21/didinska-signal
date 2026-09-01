@@ -116,9 +116,10 @@ export async function startAnalysis(env, chatId, messageId, dataPackage) {
 }
 
 /** Nyalain auto-signal (dipicu /auto, atau tombol Strategi 1/2): analisis otomatis berulang tiap 10 menit.
- * `strategy`: "s1" (default, 10 AI/analisa menyeluruh) atau "s2" (5 AI/analisa
- * cepat, cocok scalping) -- eksekusi & risk management KEDUANYA SAMA: 1
- * posisi/waktu, native SL/TP, lot % risiko, guardrail harian. */
+ * `strategy`: "s1" (default, 10 AI/analisa menyeluruh) atau "s2" (6 AI, mode
+ * "Fibo & QM" -- Fibonacci Retracement + pola Quasimodo sebagai dasar
+ * utama entry) -- eksekusi & risk management KEDUANYA SAMA: 1 posisi/waktu,
+ * native SL/TP, lot % risiko, guardrail harian. */
 export async function startAutoSignal(env, chatId, { symbol, tradeMode, aiMode, strategy = "s1" }) {
   await getStub(env, chatId).fetch("https://session/startAuto", {
     method: "POST",
