@@ -20,13 +20,21 @@ CARA KERJA (loop terus-menerus sampai di-Ctrl+C):
      lapis proteksi paralel: siapa pun (native price-based SL/TP, atau
      floating %-based ini) yang kena duluan, itu yang menutup posisi.
   4. STRATEGI 2 (opsional, dipicu tombol "Strategi 2" di Telegram): SEKARANG
-     memakai mekanisme yang SAMA PERSIS dengan Strategi 1 -- 1 posisi dalam
-     satu waktu, lot dihitung dari % risiko balance, native SL/TP dari AI
-     Penyimpul, PLUS jaring pengaman floating % yang sama (lihat poin 3).
-     Bedanya cuma magic number (MAGIC_NUMBER_S2, biar gampang dibedain di
-     history MT5) & label pesan di Telegram. Filosofinya: satu pendekatan
-     sederhana yang sama, dipakai KONSISTEN tiap kali, dengan risk
-     management yang ketat -- bukan lagi coba buka banyak posisi sekaligus.
+     memakai mekanisme EKSEKUSI yang SAMA PERSIS dengan Strategi 1 -- 1
+     posisi dalam satu waktu, lot dihitung dari % risiko balance, native
+     SL/TP dari AI Penyimpul, PLUS jaring pengaman floating % yang sama
+     (lihat poin 3). Bedanya cuma magic number (MAGIC_NUMBER_S2, biar
+     gampang dibedain di history MT5) & dasar analisa AI-nya (Fibonacci +
+     Quasimodo, diatur di sisi Worker -- script ini tidak perlu tahu
+     bedanya, cukup eksekusi apa pun yang dikirim).
+  5. AUTO-CATAT HASIL: tiap siklus polling, script ini juga cek apakah ada
+     posisi bot yang TIBA-TIBA HILANG dari open positions dibanding siklus
+     sebelumnya (native SL/TP kena, ditutup manual, dst) -- begitu ketemu,
+     ambil P/L & alasan penutupan PERSIS dari histori deal MT5, lalu lapor
+     ke Worker. Worker otomatis mencatat menang/kalah ke menu "📊 Riwayat &
+     Akurasi" (TANPA perlu kamu tap tombol manual) & kirim notifikasi
+     Telegram -- jadi statistik akurasi tetap jujur & lengkap walau mode
+     auto (Strategi 1/2) jalan tanpa pengawasan.
 
 CARA PAKAI:
   1. pip install -r requirements.txt
@@ -111,6 +119,26 @@ MAGIC_NUMBER_S2 = 20260818
 # ============================================================================
 
 HEADERS = {"Content-Type": "application/json", "X-Bridge-Secret": BRIDGE_SECRET}
+
+# --- Lacak ticket posisi bot (S1/S2) yang lagi kelihat TERBUKA, {ticket:
+# magic}. Dipakai check_closed_positions() buat DETEKSI begitu 1 ticket
+# TIBA-TIBA HILANG dari open positions dibanding siklus sebelumnya -- itu
+# tandanya baru saja closed (entah lewat native SL/TP, ditutup manual dari
+# terminal/HP, atau force-close kita sendiri lewat close_position(), yang
+# LANGSUNG menghapus ticket-nya dari dict ini begitu berhasil, supaya tidak
+# kedeteksi dobel di sini). State ini di MEMORI Python saja (reset kalau
+# script di-restart) -- aman, karena begitu restart, siklus pertama
+# check_closed_positions() otomatis mulai lacak ulang dari kondisi MT5
+# SEKARANG (tidak ada "closed" palsu buat posisi yang sudah lama terbuka).
+_tracked_open_tickets = {}
+
+DEAL_REASON_LABELS = {
+    mt5.DEAL_REASON_CLIENT: "ditutup manual (terminal/HP)",
+    mt5.DEAL_REASON_EXPERT: "ditutup otomatis (EA/API)",
+    mt5.DEAL_REASON_SL: "native SL",
+    mt5.DEAL_REASON_TP: "native TP",
+    mt5.DEAL_REASON_SO: "stop-out (margin call)",
+}
 
 
 def log(msg):
@@ -459,6 +487,12 @@ def close_position(position, reason, profit_value, strategy="s1"):
     log(f"🔒 Force-close ticket {position.ticket} sukses ({strategy_label}) -- {label} di floating {profit_value:.2f}% balance. Harga tutup={result.price}")
     report_force_close(position.ticket, reason, profit_value, result.price, position.volume, strategy=strategy)
 
+    # PENTING: hapus dari tracking SEKARANG JUGA -- ticket ini sudah kita
+    # laporkan sendiri di atas, jadi check_closed_positions() (yang jalan
+    # tiap siklus juga) TIDAK BOLEH menganggapnya "hilang secara tak
+    # terduga" & lapor ulang (bakal dobel-catat 1 trade yang sama).
+    _tracked_open_tickets.pop(position.ticket, None)
+
 
 def report_force_close(ticket, reason, profit_pct, close_price, volume, strategy="s1"):
     try:
@@ -480,11 +514,108 @@ def report_force_close(ticket, reason, profit_pct, close_price, volume, strategy
         log(f"⚠️ Gagal lapor force-close ke Worker: {err}")
 
 
+def find_closing_deal(deals):
+    """
+    Dari daftar deal 1 posisi (hasil mt5.history_deals_get), ambil deal
+    yang MENUTUP posisi (entry == DEAL_ENTRY_OUT) -- ini yang punya field
+    `reason` (native SL/TP/manual/dst, LANGSUNG dari MT5, bukan tebakan) &
+    harga penutupan yang relevan buat dilaporkan. Kalau partial-close lebih
+    dari sekali, ambil yang PALING BARU (biasanya yang menutup sisa volume
+    terakhir).
+    """
+    out_deals = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
+    if not out_deals:
+        return None
+    return max(out_deals, key=lambda d: d.time)
+
+
+def check_closed_positions():
+    """
+    Deteksi posisi bot (magic MAGIC_NUMBER/MAGIC_NUMBER_S2) yang TIBA-TIBA
+    HILANG dari open positions dibanding siklus SEBELUMNYA -- berarti baru
+    saja closed. Ini SATU-SATUNYA cara kita tahu native SL/TP kena (order
+    native itu sendiri tidak pernah lapor apa-apa balik ke script ini begitu
+    tereksekusi di sisi broker), atau kalau posisi ditutup manual dari
+    terminal/HP. (Force-close OLEH check_and_force_close() kita sendiri
+    SUDAH lapor duluan & langsung dihapus dari _tracked_open_tickets di
+    close_position(), jadi TIDAK kedeteksi dobel di sini.)
+
+    Begitu ketemu ticket yang hilang, ambil histori deal-nya
+    (mt5.history_deals_get) buat tahu P/L bersih & alasan penutupan PERSIS
+    dari MT5 -- baru lapor ke Worker, yang otomatis mencatatnya ke menu
+    "Riwayat & Akurasi" (TANPA perlu user tap tombol manual) & kirim
+    notifikasi Telegram. Dipanggil tiap siklus polling, sama seperti
+    check_and_force_close() dkk.
+    """
+    global _tracked_open_tickets
+    try:
+        positions = mt5.positions_get(symbol=SYMBOL) or []
+        own_positions = [p for p in positions if p.magic in (MAGIC_NUMBER, MAGIC_NUMBER_S2)]
+        current_tickets = {p.ticket for p in own_positions}
+
+        # Ticket baru yang belum pernah kelihat -> mulai lacak.
+        for p in own_positions:
+            if p.ticket not in _tracked_open_tickets:
+                _tracked_open_tickets[p.ticket] = p.magic
+
+        # Ticket yang tadinya dilacak, sekarang HILANG dari open positions -> closed.
+        closed_tickets = [t for t in list(_tracked_open_tickets.keys()) if t not in current_tickets]
+
+        for ticket in closed_tickets:
+            magic = _tracked_open_tickets[ticket]
+            deals = mt5.history_deals_get(position=ticket)
+            if not deals:
+                # Histori belum sempat kebentuk di sisi broker (jarang,
+                # biasanya delay sesaat) -- coba lagi siklus berikutnya,
+                # JANGAN dihapus dari tracking dulu.
+                continue
+
+            out_deal = find_closing_deal(deals)
+            if out_deal is None:
+                continue
+
+            total_profit = sum(d.profit + d.commission + d.swap for d in deals)
+            reason_label = DEAL_REASON_LABELS.get(out_deal.reason, f"lainnya (reason={out_deal.reason})")
+            strategy = "s2" if magic == MAGIC_NUMBER_S2 else "s1"
+
+            log(
+                f"📪 Posisi {ticket} ({'Strategi 2' if strategy == 's2' else 'Strategi 1'}) closed -- "
+                f"{reason_label}, P/L bersih ${total_profit:.2f}."
+            )
+            report_closed_position(ticket, strategy, total_profit, reason_label, out_deal.volume, out_deal.price)
+
+            del _tracked_open_tickets[ticket]
+    except Exception as err:
+        log(f"⚠️ Error cek posisi closed: {err}")
+        traceback.print_exc()
+
+
+def report_closed_position(ticket, strategy, profit, reason_label, volume, close_price):
+    try:
+        requests.post(
+            f"{WORKER_URL}/mt5-bridge/closed",
+            json={
+                "symbol": SYMBOL,
+                "ticket": ticket,
+                "strategy": strategy,
+                "profit": profit,
+                "reasonLabel": reason_label,
+                "volume": volume,
+                "closePrice": close_price,
+            },
+            headers=HEADERS,
+            timeout=15,
+        )
+    except Exception as err:
+        log(f"⚠️ Gagal lapor posisi closed ke Worker: {err}")
+
+
 def main():
     log("Menghubungkan ke MT5...")
     connect_mt5()
     log(f"Bridge aktif untuk simbol {SYMBOL}. Push tiap {PUSH_INTERVAL_SEC}s, polling sinyal tiap {POLL_INTERVAL_SEC}s.")
     log(f"Strategi 1 & Strategi 2 -- 1 posisi/waktu, native SL/TP + force-close otomatis: +{FORCE_CLOSE_PROFIT_PCT}% (profit lock) / -{FORCE_CLOSE_LOSS_PCT}% (cut loss) dari balance. Magic S1={MAGIC_NUMBER}, S2={MAGIC_NUMBER_S2}.")
+    log("Auto-catat hasil tiap posisi closed (native SL/TP, manual, atau force-close) ke 📊 Riwayat & Akurasi -- tidak perlu tap tombol manual.")
     log("Biarkan jendela ini tetap terbuka. Tekan Ctrl+C untuk berhenti.")
 
     last_push = 0
@@ -497,6 +628,7 @@ def main():
                 last_push = now
 
             check_and_force_close()
+            check_closed_positions()
             poll_and_execute_signal()
             time.sleep(POLL_INTERVAL_SEC)
     except KeyboardInterrupt:
