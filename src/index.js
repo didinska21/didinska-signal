@@ -1,6 +1,7 @@
 import { handleUpdate } from "./handlers/router.js";
 import { sendMessage } from "./telegram.js";
 import { escapeHtml } from "./htmlUtil.js";
+import { markSignalResult } from "./signalLog.js";
 
 export { SessionDO } from "./session_do.js";
 export { SignalLogDO } from "./signal_log_do.js";
@@ -115,6 +116,20 @@ async function handleMt5BridgeRequest(request, env, pathname) {
     });
     const resultJson = await res.json();
 
+    // Auto-catat hasil ke menu "📊 Riwayat & Akurasi" -- TANPA perlu user
+    // tap tombol "TP Kena"/"SL Kena" manual. Penting buat auto-mode
+    // (Strategi 1/2) yang jalan tanpa pengawasan -- kalau ini tidak ada,
+    // statistik Riwayat & Akurasi cuma berisi sinyal manual yang sempat
+    // ditandai user, tidak jujur buat menilai performa auto-signal.
+    if (resultJson.signalId) {
+      const status = (typeof profitPct === "number" ? profitPct : 0) > 0 ? "win" : "loss";
+      try {
+        await markSignalResult(env, resultJson.signalId, status);
+      } catch (err) {
+        console.error("Gagal auto-mark hasil sinyal (forceclose):", err);
+      }
+    }
+
     // Notifikasi ke user Telegram (best-effort, tidak menggagalkan response
     // ke bridge kalau notifikasi gagal terkirim) -- cuma bisa dikirim kalau
     // ticket ini ketemu pemetaan chatId-nya (lihat reportExecution/ticketMap
@@ -133,6 +148,59 @@ async function handleMt5BridgeRequest(request, env, pathname) {
         await sendMessage(env, resultJson.chatId, text);
       } catch (err) {
         console.error("Gagal kirim notifikasi force-close MT5:", err);
+      }
+    }
+
+    return Response.json(resultJson, { status: res.status });
+  }
+
+  // --- Bridge lapor posisi yang TIBA-TIBA HILANG dari open positions
+  // (dibanding siklus sebelumnya): POST /mt5-bridge/closed ---
+  // Ini yang nangkep NATIVE SL/TP kena (kasus PALING UMUM -- order native
+  // itu sendiri tidak pernah lapor apa-apa balik begitu tereksekusi di
+  // sisi broker) dan penutupan manual dari terminal/HP. Beda dari
+  // /mt5-bridge/forceclose yang khusus force-close % OLEH bridge sendiri.
+  // Lihat check_closed_positions() di mt5_bridge.py.
+  if (pathname === "/mt5-bridge/closed" && request.method === "POST") {
+    const body = await request.json();
+    const { symbol, ticket, profit, reasonLabel, closePrice, volume } = body;
+    if (!symbol || ticket == null) {
+      return Response.json({ ok: false, error: "symbol/ticket wajib diisi" }, { status: 400 });
+    }
+    const stub = getMt5Stub(env, symbol);
+    const res = await stub.fetch("https://mt5-bridge/reportClosedPosition", {
+      method: "POST",
+      body: JSON.stringify({ ticket, profit, reasonLabel, closePrice, volume }),
+    });
+    const resultJson = await res.json();
+
+    // Auto-catat hasil ke menu "📊 Riwayat & Akurasi" -- TANPA perlu user
+    // tap tombol manual. Ini jalur PALING PENTING karena native SL/TP
+    // adalah cara PALING UMUM posisi ditutup.
+    if (resultJson.signalId) {
+      const status = (typeof profit === "number" ? profit : 0) > 0 ? "win" : "loss";
+      try {
+        await markSignalResult(env, resultJson.signalId, status);
+      } catch (err) {
+        console.error("Gagal auto-mark hasil sinyal (closed):", err);
+      }
+    }
+
+    if (resultJson.chatId) {
+      try {
+        const strategyLabel = resultJson.strategy === "s2" ? " (Strategi 2)" : " (Strategi 1)";
+        const isWin = (typeof profit === "number" ? profit : 0) > 0;
+        const profitLabel = typeof profit === "number" ? profit.toFixed(2) : String(profit ?? "-");
+
+        const text =
+          `${isWin ? "✅ Posisi Ditutup — PROFIT" : "❌ Posisi Ditutup — RUGI"}${strategyLabel}\n` +
+          `Simbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket))}\n` +
+          `P/L bersih: $${escapeHtml(profitLabel)}\nAlasan: ${escapeHtml(reasonLabel || "-")}\n` +
+          `Harga tutup: ${escapeHtml(String(closePrice ?? "-"))} | Lot: ${escapeHtml(String(volume ?? "-"))}\n\n` +
+          `<i>Otomatis tercatat ke 📊 Riwayat & Akurasi — tidak perlu tap tombol manual.</i>`;
+        await sendMessage(env, resultJson.chatId, text);
+      } catch (err) {
+        console.error("Gagal kirim notifikasi posisi closed:", err);
       }
     }
 
