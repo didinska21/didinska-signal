@@ -313,6 +313,61 @@ def poll_and_execute_signal():
         traceback.print_exc()
 
 
+# Buffer TAMBAHAN (poin) di atas trade_stops_level minimum broker -- jaga-
+# jaga dari race kecil (harga bisa geser sedikit antara AI menghitung level
+# & saat order ini benar-benar dikirim) supaya order tidak GAGAL LAGI
+# gara-gara PAS di garis batas.
+STOPS_LEVEL_SAFETY_BUFFER_POINTS = 20
+
+
+def adjust_sl_tp_for_broker_limits(order_type, price, sl, tp):
+    """
+    Beberapa broker (termasuk broker demo umum) MENOLAK order kalau SL/TP
+    terlalu dekat dari harga eksekusi (retcode 10016 "Invalid stops") --
+    jarak minimumnya ada di symbol_info().trade_stops_level (dalam POIN,
+    beda-beda tiap broker/simbol, sering 0 tapi bisa juga puluhan poin).
+    Level dari AI Penyimpul (terutama pola Fibonacci/Quasimodo di Strategi
+    2, yang ngikutin swing point ASLI di chart, bukan aturan broker)
+    kadang lebih dekat dari batas itu -- order jadi DITOLAK & sinyal sia-
+    sia (tidak pernah tereksekusi sama sekali).
+
+    Fungsi ini GESER KELUAR (menjauh dari harga) SL/TP yang kepepet
+    melanggar jarak minimum itu -- SEKADAR CUKUP supaya order diterima,
+    level yang sudah cukup jauh TIDAK disentuh. Kembaliannya juga flag
+    `adjusted` supaya penyesuaian ini KELIHATAN di log (transparan, bukan
+    diam-diam mengubah risk management sinyal).
+    """
+    symbol_info = mt5.symbol_info(SYMBOL)
+    if symbol_info is None:
+        return sl, tp, False
+
+    point = symbol_info.point
+    digits = symbol_info.digits
+    min_points = max(symbol_info.trade_stops_level, symbol_info.trade_freeze_level, 0)
+    min_distance = (min_points + STOPS_LEVEL_SAFETY_BUFFER_POINTS) * point
+
+    adjusted = False
+    is_buy = order_type == mt5.ORDER_TYPE_BUY
+
+    if sl is not None:
+        if is_buy and price - sl < min_distance:
+            sl = round(price - min_distance, digits)
+            adjusted = True
+        elif not is_buy and sl - price < min_distance:
+            sl = round(price + min_distance, digits)
+            adjusted = True
+
+    if tp is not None:
+        if is_buy and tp - price < min_distance:
+            tp = round(price + min_distance, digits)
+            adjusted = True
+        elif not is_buy and price - tp < min_distance:
+            tp = round(price - min_distance, digits)
+            adjusted = True
+
+    return sl, tp, adjusted
+
+
 def execute_order(signal):
     decision = signal["decision"]
     strategy = signal.get("strategy") or "s1"
@@ -353,10 +408,20 @@ def execute_order(signal):
     # strategi sekarang, bukan cuma Strategi 1.
     sl = signal.get("sl")
     tp = signal.get("tp")
+    sl = float(sl) if sl is not None else None
+    tp = float(tp) if tp is not None else None
+
+    # Geser SL/TP keluar SEPERLUNYA kalau kepepet melanggar jarak minimum
+    # broker (lihat docstring fungsinya) -- mencegah order gagal sia-sia
+    # gara-gara retcode 10016 "Invalid stops".
+    sl, tp, adjusted = adjust_sl_tp_for_broker_limits(order_type, price, sl, tp)
+    if adjusted:
+        log(f"ℹ️ SL/TP digeser sedikit menjauh dari harga eksekusi (kepepet di bawah jarak minimum broker). SL={sl}, TP={tp}, harga≈{price}.")
+
     if sl is not None:
-        request_payload["sl"] = float(sl)
+        request_payload["sl"] = sl
     if tp is not None:
-        request_payload["tp"] = float(tp)
+        request_payload["tp"] = tp
 
     result = mt5.order_send(request_payload)
 
