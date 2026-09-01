@@ -112,13 +112,13 @@ async function handleMessage(env, message) {
   // keyboard cuma bisa kirim TEKS persis label tombolnya, jadi dicocokkan
   // sebagai teks biasa, bukan callback_data. Lanjut ke pilih trade mode
   // (inline) dulu sebelum benar-benar mulai siklus auto.
-  if (text === "🧭 Strategi 1 (XAUUSD)" || text === "🧱 Strategi 2 (10 Layer)") {
-    const isS2 = text === "🧱 Strategi 2 (10 Layer)";
+  if (text === "🧭 Strategi 1 (XAUUSD)" || text === "🎯 Strategi 2 (Pro)") {
+    const isS2 = text === "🎯 Strategi 2 (Pro)";
     await setMode(env, chatId, isS2 ? "choosing_auto_trademode_s2" : "choosing_auto_trademode_s1");
     await sendMessage(
       env,
       chatId,
-      `${isS2 ? "🧱 <b>Strategi 2 (10 Layer)</b>" : "🧭 <b>Strategi 1</b>"} — XAUUSD\n\nPilih mode trading buat siklus analisanya:`,
+      `${isS2 ? "🎯 <b>Strategi 2 (Pro)</b>" : "🧭 <b>Strategi 1</b>"} — XAUUSD\n\nPilih mode trading buat siklus analisanya:`,
       autoTradeModeKeyboard()
     );
     return;
@@ -324,19 +324,20 @@ async function handleCallbackQuery(env, callbackQuery) {
     const strategy = currentMode === "choosing_auto_trademode_s2" ? "s2" : "s1";
     await setMode(env, chatId, "idle");
 
-    // Strategi 2 selalu "cepat" (5 AI) -- siklus auto-nya berpotensi jauh
-    // lebih sering manggil AI dibanding Strategi 1 (S1 biasanya "diam"
-    // begitu 1 posisi kebuka; S2 tetap lanjut generate sinyal tiap 10
-    // menit selama belum pas 10 layer). Strategi 1 tetap "lengkap" (10 AI)
-    // seperti /auto XAUUSD biasa.
+    // Strategi 2 tetap "cepat" (5 AI, cocok buat scalping -- analisa lebih
+    // singkat/cepat diputuskan) VS Strategi 1 "lengkap" (10 AI, analisa
+    // lebih menyeluruh/lambat, cocok daytrade/swing). Bedanya SEKARANG
+    // cuma di kedalaman analisa & gaya timeframe -- eksekusi & risk
+    // management-nya (1 posisi/waktu, native SL/TP, lot % risiko, circuit
+    // breaker harian) SAMA PERSIS buat keduanya.
     const aiMode = strategy === "s2" ? "cepat" : "lengkap";
     await startAutoSignal(env, chatId, { symbol: "XAUUSD", tradeMode, aiMode, strategy });
 
     const modeLabel = TRADE_MODES[tradeMode]?.label || tradeMode;
     const text =
       strategy === "s2"
-        ? `🧱 <b>Strategi 2 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 5 AI\n\nSampai 10 layer independen, market order MURNI (tanpa native SL/TP). Tiap layer auto-close SENDIRI di floating +$2 (TP)/-$1 (SL), dipantau bridge Python. Siklus di-skip otomatis (hemat API) begitu pas 10 layer terbuka.\n\n⚠️ Tanpa native SL/TP berarti posisi 100% bergantung bridge Python nyala terus.\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`
-        : `🧭 <b>Strategi 1 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 10 AI\n\n1 posisi, native SL/TP dari AI Penyimpul, lot dihitung otomatis (risiko ≈1% balance ke SL). Force-close tambahan di floating +2%/-1% balance.\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`;
+        ? `🎯 <b>Strategi 2 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 5 AI (scalping, analisa cepat)\n\n1 posisi dalam satu waktu, native SL/TP dari AI Penyimpul, lot dihitung otomatis (risiko ≈1% balance ke SL). Force-close tambahan di floating +2%/-1% balance. Limit 5 trade/hari & circuit breaker rugi harian 3%.\n\n<i>Filosofinya: satu pendekatan sederhana yang sama, dipakai konsisten tiap kali, dengan risk management yang ketat.</i>\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`
+        : `🧭 <b>Strategi 1 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 10 AI (analisa menyeluruh)\n\n1 posisi, native SL/TP dari AI Penyimpul, lot dihitung otomatis (risiko ≈1% balance ke SL). Force-close tambahan di floating +2%/-1% balance.\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`;
     await editMessageText(env, chatId, messageId, text);
     return;
   }
