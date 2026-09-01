@@ -121,8 +121,9 @@ export function tradeModeKeyboard() {
 
 // --- Keyboard PERMANEN (ReplyKeyboardMarkup, nempel di atas kolom ketik,
 // BEDA dari semua keyboard lain di file ini yang nempel per-pesan/inline)
-// buat pilih Strategi 1 (10 AI, analisa menyeluruh) vs Strategi 2 (5 AI,
-// analisa cepat/scalping). Eksekusi & risk management KEDUANYA SAMA
+// buat pilih Strategi 1 (10 AI, analisa menyeluruh) vs Strategi 2 (6 AI,
+// fokus Fibonacci Retracement + pola Quasimodo untuk entry presisi).
+// Eksekusi & risk management KEDUANYA SAMA
 // PERSIS: 1 posisi dalam satu waktu, native SL/TP dari AI, lot dihitung
 // otomatis dari % risiko, force-close tambahan di floating %, limit
 // trade/hari & circuit breaker rugi harian. Keduanya SALING EKSKLUSIF —
@@ -144,10 +145,10 @@ export function strategyReplyKeyboard() {
 
 export const STRATEGY_KEYBOARD_INTRO_TEXT = `👇 Keyboard strategi XAUUSD nempel permanen di bawah kolom ketik.
 
-Kedua strategi sekarang pakai risk management yang SAMA: 1 posisi dalam satu waktu, native SL/TP dari AI Penyimpul, lot otomatis dari % risiko balance, plus force-close tambahan di floating %, limit trade/hari, dan circuit breaker rugi harian. Bedanya cuma kedalaman & kecepatan analisanya:
+Kedua strategi sekarang pakai risk management yang SAMA: 1 posisi dalam satu waktu, native SL/TP dari AI Penyimpul, lot otomatis dari % risiko balance, plus force-close tambahan di floating %, limit trade/hari, dan circuit breaker rugi harian. Bedanya cuma DASAR ANALISA buat nentuin entry-nya:
 
-🧭 <b>Strategi 1</b> — 10 AI, analisa menyeluruh (cocok daytrade/swing).
-🎯 <b>Strategi 2</b> — 5 AI, analisa lebih cepat (cocok scalping).
+🧭 <b>Strategi 1</b> — 10 AI, analisa menyeluruh (trend, momentum, volume, SMC, price action, multi-timeframe, makro, dll).
+🎯 <b>Strategi 2</b> — 6 AI, fokus Fibonacci Retracement & pola Quasimodo sebagai dasar utama entry (level presisi dari struktur harga), ditunjang Trend/Momentum/Volume/Risk Management.
 
 Cuma 1 yang aktif dalam satu waktu — pilih salah satu tombol di bawah kapan aja buat mulai (otomatis gantiin yang lain kalau ada yang lagi jalan).`;
 
