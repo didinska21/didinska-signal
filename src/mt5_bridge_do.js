@@ -20,12 +20,13 @@
  * claimPhotoPromptMsgId di session_do.js, supaya kalau bridge polling
  * lebih dari sekali hampir bersamaan, sinyal yang sama tidak "diambil"
  * dua kali (double order).
+ *
+ * Strategi 1 & Strategi 2 SEKARANG memakai guardrail & state yang SAMA
+ * (checkAutonomousGuardrails/riskState) -- 1 posisi terbuka dalam satu
+ * waktu (lintas strategi, karena cuma 1 strategi yang aktif dalam satu
+ * waktu), limit trade/hari, circuit breaker rugi harian. Bedanya cuma
+ * label `strategy` yang dikirim balik ke Worker buat teks notifikasi.
  */
-
-// Strategi 2: maksimal layer independen yang boleh terbuka bersamaan. HARUS
-// sinkron dengan MAX_LAYERS di src/session_do.js (dipakai buat teks pesan) --
-// kalau salah satu diubah, ubah juga yang satunya.
-const MAX_LAYERS = 10;
 
 export class Mt5BridgeDO {
   constructor(state, env) {
@@ -44,7 +45,7 @@ export class Mt5BridgeDO {
       // kontrol risiko mode otonom: (1) 1 posisi terbuka dalam satu waktu,
       // (2) limit trade per hari, (3) circuit breaker rugi harian.
       case "reportStatus": {
-        const { balance, equity, openPositionTicket, layerTickets } = await request.json();
+        const { balance, equity, openPositionTicket } = await request.json();
         const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 
         let risk = (await this.storage.get("riskState")) || null;
@@ -58,14 +59,6 @@ export class Mt5BridgeDO {
         risk.openPositionTicket = openPositionTicket ?? null;
         risk.updatedAt = Date.now();
         await this.storage.put("riskState", risk);
-
-        // --- Strategi 2: sinkron PENUH daftar ticket layer yang lagi
-        // terbuka, dari kondisi MT5 SEBENARNYA (bukan cuma incremental
-        // push/pop dari reportExecution/reportForceClose) -- self-healing
-        // kalau ada 1-2 event yang kebetulan gagal terkirim ke Worker.
-        if (Array.isArray(layerTickets)) {
-          await this.storage.put("layerState", { openTickets: layerTickets, updatedAt: Date.now() });
-        }
 
         return Response.json({ ok: true, risk });
       }
@@ -143,36 +136,6 @@ export class Mt5BridgeDO {
         });
       }
 
-      // --- Strategi 2: cek apakah masih boleh buka 1 layer lagi. Beda dari
-      // checkAutonomousGuardrails (S1) -- TIDAK ada limit trade/hari atau
-      // circuit breaker rugi harian, TIDAK ada efek samping/counter yang
-      // di-increment (jumlah layer terbuka itu sendiri sudah "counter"-nya,
-      // disinkron dari reportStatus + reportExecution/reportForceClose).
-      case "checkLayerGuardrails": {
-        const layer = (await this.storage.get("layerState")) || { openTickets: [] };
-        const openLayerCount = layer.openTickets.length;
-
-        if (openLayerCount >= MAX_LAYERS) {
-          return Response.json({
-            allowed: false,
-            reason: `Sudah pas ${openLayerCount}/${MAX_LAYERS} layer terbuka. Tunggu salah satu layer close dulu.`,
-            openLayerCount,
-          });
-        }
-
-        return Response.json({ allowed: true, openLayerCount });
-      }
-
-      // --- Snapshot ringan jumlah layer Strategi 2 yang terbuka, TANPA efek
-      // samping. Dipakai session_do.js buat skip siklus auto SEBELUM panggil
-      // AI sama sekali, begitu sudah pas MAX_LAYERS.
-      case "getLayerSnapshot": {
-        const layer = await this.storage.get("layerState");
-        if (!layer) return Response.json({ openLayerCount: 0, stale: true });
-        const age = Date.now() - (layer.updatedAt || 0);
-        return Response.json({ openLayerCount: layer.openTickets.length, stale: age > 5 * 60 * 1000 });
-      }
-
       case "pushCandles": {
         const { interval, candles } = await request.json();
         if (!interval || !Array.isArray(candles) || candles.length === 0) {
@@ -246,50 +209,29 @@ export class Mt5BridgeDO {
         // apa di pesannya.
         if (status === "filled" && ticket != null) {
           await this.storage.put(`ticketMap:${ticket}`, { signalId, chatId: record.chatId, strategy: record.strategy || "s1" });
-
-          // Strategi 2: optimistic-add ke layerState SEKARANG JUGA (jangan
-          // nunggu siklus reportStatus berikutnya) supaya siklus auto
-          // berikutnya langsung tahu 1 layer baru saja terisi. Sinkron
-          // penuh tetap terjadi tiap reportStatus, jadi ini aman kalau
-          // ternyata dobel/beda dari kondisi MT5 sebenarnya.
-          if (record.strategy === "s2") {
-            const layer = (await this.storage.get("layerState")) || { openTickets: [] };
-            if (!layer.openTickets.includes(ticket)) layer.openTickets.push(ticket);
-            layer.updatedAt = Date.now();
-            await this.storage.put("layerState", layer);
-          }
         }
 
         return Response.json({ ok: true, record });
       }
 
       // --- Bridge lapor force-close otomatis: floating profit/rugi posisi
-      // sudah nyentuh ambang % dari balance (RISK_TP_PCT/RISK_SL_PCT, lihat
-      // check_and_force_close() di mt5_bridge.py) SEBELUM harga sempat
-      // sampai ke level SL/TP asli dari AI Penyimpul. Juga membersihkan
-      // openPositionTicket di riskState SEKARANG JUGA (jangan nunggu siklus
-      // reportStatus berikutnya) supaya siklus auto berikutnya tidak salah
-      // kira posisi masih terbuka.
+      // sudah nyentuh ambang % dari balance (FORCE_CLOSE_PROFIT_PCT/
+      // FORCE_CLOSE_LOSS_PCT, lihat check_and_force_close() di
+      // mt5_bridge.py) SEBELUM harga sempat sampai ke level SL/TP asli dari
+      // AI Penyimpul. Berlaku SAMA untuk Strategi 1 & Strategi 2. Juga
+      // membersihkan openPositionTicket di riskState SEKARANG JUGA (jangan
+      // nunggu siklus reportStatus berikutnya) supaya siklus auto
+      // berikutnya tidak salah kira posisi masih terbuka.
       case "reportForceClose": {
-        const { ticket, reason, profitPct, profitUsd, closePrice, volume } = await request.json();
+        const { ticket, reason, profitPct, closePrice, volume } = await request.json();
         const mapped = ticket != null ? await this.storage.get(`ticketMap:${ticket}`) : null;
         const strategy = mapped?.strategy || "s1";
 
-        if (strategy === "s2") {
-          // Strategi 2: hapus ticket ini dari layerState SEKARANG JUGA
-          // (optimistic, jangan nunggu reportStatus berikutnya) supaya
-          // slot layer langsung kebuka lagi buat entry baru.
-          const layer = (await this.storage.get("layerState")) || { openTickets: [] };
-          layer.openTickets = layer.openTickets.filter((t) => t !== ticket);
-          layer.updatedAt = Date.now();
-          await this.storage.put("layerState", layer);
-        } else {
-          const risk = await this.storage.get("riskState");
-          if (risk && risk.openPositionTicket === ticket) {
-            risk.openPositionTicket = null;
-            risk.updatedAt = Date.now();
-            await this.storage.put("riskState", risk);
-          }
+        const risk = await this.storage.get("riskState");
+        if (risk && risk.openPositionTicket === ticket) {
+          risk.openPositionTicket = null;
+          risk.updatedAt = Date.now();
+          await this.storage.put("riskState", risk);
         }
 
         return Response.json({
@@ -299,7 +241,6 @@ export class Mt5BridgeDO {
           strategy,
           reason,
           profitPct,
-          profitUsd,
           closePrice,
           volume,
         });

@@ -84,12 +84,11 @@ async function handleMt5BridgeRequest(request, env, pathname) {
     // menggagalkan response ke bridge kalau notifikasi gagal terkirim).
     if (chatId) {
       try {
-        const isLayer = strategy === "s2";
-        const label = isLayer ? "Layer" : "Order";
+        const strategyLabel = strategy === "s2" ? " (Strategi 2)" : "";
         const text =
           status === "filled"
-            ? `✅ <b>${label} tereksekusi di MT5</b>\nSimbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket ?? "-"))}\nHarga fill: ${escapeHtml(String(fillPrice ?? "-"))}`
-            : `❌ <b>${label} GAGAL dieksekusi di MT5</b>\nSimbol: ${escapeHtml(symbol)}\nAlasan: ${escapeHtml(message || "tidak diketahui")}`;
+            ? `✅ <b>Order tereksekusi di MT5${strategyLabel}</b>\nSimbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket ?? "-"))}\nHarga fill: ${escapeHtml(String(fillPrice ?? "-"))}`
+            : `❌ <b>Order GAGAL dieksekusi di MT5${strategyLabel}</b>\nSimbol: ${escapeHtml(symbol)}\nAlasan: ${escapeHtml(message || "tidak diketahui")}`;
         await sendMessage(env, chatId, text);
       } catch (err) {
         console.error("Gagal kirim notifikasi hasil eksekusi MT5:", err);
@@ -100,20 +99,19 @@ async function handleMt5BridgeRequest(request, env, pathname) {
   }
 
   // --- Bridge lapor force-close otomatis: POST /mt5-bridge/forceclose ---
-  // Strategi 1: floating % dari balance nyentuh ambang, SEBELUM harga
-  // sempat sampai ke level SL/TP asli sinyal (yang native, di order).
-  // Strategi 2: floating $ FLAT (+$2/-$1) per layer, TIDAK ada native
-  // SL/TP sama sekali jadi murni ini yang menutup posisi.
+  // Floating % dari balance nyentuh ambang, SEBELUM harga sempat sampai ke
+  // level SL/TP asli sinyal (yang native, di order) -- berlaku SAMA untuk
+  // Strategi 1 maupun Strategi 2.
   if (pathname === "/mt5-bridge/forceclose" && request.method === "POST") {
     const body = await request.json();
-    const { symbol, ticket, reason, profitPct, profitUsd, closePrice, volume } = body;
+    const { symbol, ticket, reason, profitPct, closePrice, volume } = body;
     if (!symbol || ticket == null) {
       return Response.json({ ok: false, error: "symbol/ticket wajib diisi" }, { status: 400 });
     }
     const stub = getMt5Stub(env, symbol);
     const res = await stub.fetch("https://mt5-bridge/reportForceClose", {
       method: "POST",
-      body: JSON.stringify({ ticket, reason, profitPct, profitUsd, closePrice, volume }),
+      body: JSON.stringify({ ticket, reason, profitPct, closePrice, volume }),
     });
     const resultJson = await res.json();
 
@@ -123,20 +121,15 @@ async function handleMt5BridgeRequest(request, env, pathname) {
     // di mt5_bridge_do.js).
     if (resultJson.chatId) {
       try {
-        const isLayer = resultJson.strategy === "s2";
-        const isTp = reason === "tp_pct" || reason === "layer_tp_usd";
-        const usdLabel = typeof profitUsd === "number" ? profitUsd.toFixed(2) : String(profitUsd ?? "-");
+        const strategyLabel = resultJson.strategy === "s2" ? " (Strategi 2)" : "";
+        const isTp = reason === "tp_pct";
         const pctLabel = typeof profitPct === "number" ? profitPct.toFixed(2) : String(profitPct ?? "-");
 
-        const text = isLayer
-          ? `${isTp ? "🧱✅ Layer TP" : "🧱❌ Layer SL"} (Strategi 2)\nSimbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket))}\n` +
-            `Floating saat ditutup: $${escapeHtml(usdLabel)}\n` +
-            `Harga tutup: ${escapeHtml(String(closePrice ?? "-"))} | Lot: ${escapeHtml(String(volume ?? "-"))}\n\n` +
-            `<i>Market order tanpa native SL/TP, jadi ini satu-satunya yang menutup layer ini.</i>`
-          : `${isTp ? "🔒✅ Profit Lock (floating % balance)" : "🔒❌ Cut Loss (floating % balance)"}\nSimbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket))}\n` +
-            `Floating saat ditutup: ${escapeHtml(pctLabel)}% dari balance\n` +
-            `Harga tutup: ${escapeHtml(String(closePrice ?? "-"))} | Lot: ${escapeHtml(String(volume ?? "-"))}\n\n` +
-            `<i>Ditutup otomatis oleh bridge karena floating sudah mencapai ambang %, sebelum harga sempat sampai ke level SL/TP asli sinyal ini.</i>`;
+        const text =
+          `${isTp ? "🔒✅ Profit Lock (floating % balance)" : "🔒❌ Cut Loss (floating % balance)"}${strategyLabel}\nSimbol: ${escapeHtml(symbol)}\nTicket: ${escapeHtml(String(ticket))}\n` +
+          `Floating saat ditutup: ${escapeHtml(pctLabel)}% dari balance\n` +
+          `Harga tutup: ${escapeHtml(String(closePrice ?? "-"))} | Lot: ${escapeHtml(String(volume ?? "-"))}\n\n` +
+          `<i>Ditutup otomatis oleh bridge karena floating sudah mencapai ambang %, sebelum harga sempat sampai ke level SL/TP asli sinyal ini.</i>`;
         await sendMessage(env, resultJson.chatId, text);
       } catch (err) {
         console.error("Gagal kirim notifikasi force-close MT5:", err);

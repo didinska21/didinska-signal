@@ -116,7 +116,9 @@ export async function startAnalysis(env, chatId, messageId, dataPackage) {
 }
 
 /** Nyalain auto-signal (dipicu /auto, atau tombol Strategi 1/2): analisis otomatis berulang tiap 10 menit.
- * `strategy`: "s1" (default, posisi tunggal) atau "s2" (10 layer independen, market order + $ flat). */
+ * `strategy`: "s1" (default, 10 AI/analisa menyeluruh) atau "s2" (5 AI/analisa
+ * cepat, cocok scalping) -- eksekusi & risk management KEDUANYA SAMA: 1
+ * posisi/waktu, native SL/TP, lot % risiko, guardrail harian. */
 export async function startAutoSignal(env, chatId, { symbol, tradeMode, aiMode, strategy = "s1" }) {
   await getStub(env, chatId).fetch("https://session/startAuto", {
     method: "POST",

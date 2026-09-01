@@ -121,17 +121,20 @@ export function tradeModeKeyboard() {
 
 // --- Keyboard PERMANEN (ReplyKeyboardMarkup, nempel di atas kolom ketik,
 // BEDA dari semua keyboard lain di file ini yang nempel per-pesan/inline)
-// buat pilih Strategi 1 (posisi tunggal, native SL/TP, lot % risiko) vs
-// Strategi 2 (sampai 10 layer independen, market order murni, TP $2/SL $1
-// flat per layer). Keduanya SALING EKSKLUSIF — mulai salah satu otomatis
-// mengganti siklus auto yang lain (lihat startAuto di session_do.js).
+// buat pilih Strategi 1 (10 AI, analisa menyeluruh) vs Strategi 2 (5 AI,
+// analisa cepat/scalping). Eksekusi & risk management KEDUANYA SAMA
+// PERSIS: 1 posisi dalam satu waktu, native SL/TP dari AI, lot dihitung
+// otomatis dari % risiko, force-close tambahan di floating %, limit
+// trade/hari & circuit breaker rugi harian. Keduanya SALING EKSKLUSIF —
+// mulai salah satu otomatis mengganti siklus auto yang lain (lihat
+// startAuto di session_do.js).
 // Ditampilkan lewat sendMessage(..., strategyReplyKeyboard()), bukan
 // editMessageReplyMarkup, karena ReplyKeyboardMarkup cuma bisa dikirim
 // nempel ke pesan BARU, tidak bisa "ditempelkan" ke pesan lama.
 export function strategyReplyKeyboard() {
   return {
     keyboard: [
-      [{ text: "🧭 Strategi 1 (XAUUSD)" }, { text: "🧱 Strategi 2 (10 Layer)" }],
+      [{ text: "🧭 Strategi 1 (XAUUSD)" }, { text: "🎯 Strategi 2 (Pro)" }],
       [{ text: "⏹️ Stop Auto" }],
     ],
     resize_keyboard: true,
@@ -141,8 +144,10 @@ export function strategyReplyKeyboard() {
 
 export const STRATEGY_KEYBOARD_INTRO_TEXT = `👇 Keyboard strategi XAUUSD nempel permanen di bawah kolom ketik.
 
-🧭 <b>Strategi 1</b> — 1 posisi, native SL/TP dari AI, lot dihitung otomatis (risiko ≈1% balance ke SL).
-🧱 <b>Strategi 2</b> — sampai 10 layer independen, market order murni (tanpa native SL/TP), tiap layer auto-close sendiri di floating +$2/-$1.
+Kedua strategi sekarang pakai risk management yang SAMA: 1 posisi dalam satu waktu, native SL/TP dari AI Penyimpul, lot otomatis dari % risiko balance, plus force-close tambahan di floating %, limit trade/hari, dan circuit breaker rugi harian. Bedanya cuma kedalaman & kecepatan analisanya:
+
+🧭 <b>Strategi 1</b> — 10 AI, analisa menyeluruh (cocok daytrade/swing).
+🎯 <b>Strategi 2</b> — 5 AI, analisa lebih cepat (cocok scalping).
 
 Cuma 1 yang aktif dalam satu waktu — pilih salah satu tombol di bawah kapan aja buat mulai (otomatis gantiin yang lain kalau ada yang lagi jalan).`;
 

@@ -20,17 +20,9 @@ import { logSignal, listSignals, markSignalResult } from "./signalLog.js";
 import { buildMarketDataPackage } from "./marketData.js";
 import { fetchCurrentPrice, isMt5Symbol } from "./marketSource.js";
 import { buildSignalChartImage } from "./ChartImage.js";
-import { enqueueMt5Execution, checkMt5AutonomousGuardrails, getMt5RiskSnapshot, checkMt5LayerGuardrails, getMt5LayerSnapshot } from "./mt5Exec.js";
+import { enqueueMt5Execution, checkMt5AutonomousGuardrails, getMt5RiskSnapshot } from "./mt5Exec.js";
 
-const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit
-
-// Strategi 2 saja: begitu 1 layer BERHASIL entry, langsung coba buka layer
-// berikutnya cepat (bukan nunggu AUTO_INTERVAL_MS/10 menit) -- supaya kalau
-// user memang mau "ngebut" sampai 10 layer, tidak nunggu lama antar layer.
-// Kalau siklus barusan WAIT (tidak entry) atau layer sudah penuh (10/10),
-// tetap balik ke jeda normal AUTO_INTERVAL_MS (hindari buang-buang limit API
-// AI percuma nge-generate sinyal padahal tidak akan dieksekusi).
-const AUTO_INTERVAL_LAYER_MS = 30 * 1000; // 30 detik
+const AUTO_INTERVAL_MS = 10 * 60 * 1000; // 10 menit -- berlaku sama untuk Strategi 1 & Strategi 2
 
 const STEP_DELAY_MS = 1800; // jeda antar "AI" biar kelihatan seperti proses satu-satu
 
@@ -99,23 +91,12 @@ function calcRiskBasedLot(balance, entryPrice, slPrice) {
   return { lot, slDistance, riskAmount };
 }
 
-// --- Strategi 2: sampai MAX_LAYERS posisi INDEPENDEN sekaligus (bukan cuma
-// 1), market order MURNI (TANPA native SL/TP -- keputusan sadar user,
-// artinya posisi ini 100% bergantung bridge Python nyala & polling normal,
-// tidak ada jaring pengaman di level broker). Tiap layer auto-close SENDIRI
-// (tidak saling terkait) begitu floating-nya nyentuh +LAYER_TP_USD atau
-// -LAYER_SL_USD -- FLAT dollar, BUKAN % dari balance seperti Strategi 1.
-// TIDAK ada limit trade/hari atau circuit breaker rugi harian (beda dari
-// Strategi 1), sesuai permintaan eksplisit user. Semua angka ini HARUS
-// sinkron dengan mt5_bridge.py (MAGIC_NUMBER_LAYER/LAYER_TP_USD/
-// LAYER_SL_USD) & mt5_bridge_do.js (MAX_LAYERS) -- kalau salah satu diubah,
-// ubah juga yang lain.
-const MAX_LAYERS = 10;
-const LAYER_TP_USD = 2;
-const LAYER_SL_USD = 1;
-// Lot FIXED sama untuk semua layer (bukan dihitung dari % risiko seperti
-// Strategi 1) -- bisa dioverride lewat env var MT5_LAYER_LOT.
-const DEFAULT_LAYER_LOT = 0.01;
+// Strategi 2 SEKARANG memakai mekanisme yang PERSIS SAMA dengan Strategi 1
+// (lihat calcRiskBasedLot, RISK_SL_PCT/RISK_TP_PCT, checkMt5AutonomousGuardrails
+// di atas) -- 1 posisi dalam satu waktu, native SL/TP, lot berbasis % risiko,
+// limit trade/hari & circuit breaker rugi harian. Bedanya cuma label
+// `strategy: "s2"` yang dikirim ke bridge (magic number beda di MT5, biar
+// gampang dibedain di history), TIDAK ada lagi 10 layer market-order-murni.
 
 export class SessionDO {
   constructor(state, env) {
@@ -308,12 +289,6 @@ export class SessionDO {
     const { chatId, messageId, aiMode, tradeMode, symbol, photos, dataPackage, step, opinions, strategy } = job;
     const analystsList = getAnalystsForMode(aiMode);
 
-    // Strategi 2 saja: jadi true kalau siklus INI berhasil buka 1 layer baru
-    // ke MT5 bridge -- dipakai buat mempercepat jeda ke siklus berikutnya
-    // (lihat AUTO_INTERVAL_LAYER_MS), supaya langsung lanjut coba layer
-    // berikutnya sampai benar-benar 10/10, bukan nunggu 10 menit tiap layer.
-    let layerJustEntered = false;
-
     try {
       if (step < analystsList.length) {
         const analyst = analystsList[step];
@@ -420,42 +395,6 @@ export class SessionDO {
         //       dan SEMUA itu hanya jalan kalau saklar MT5_AUTONOMOUS_XAUUSD
         //       di env di-set eksplisit ke "true".
         if (isMt5Symbol(symbol) && (!job.isAuto || AUTONOMOUS_XAUUSD_ENABLED(this.env))) {
-          if (job.isAuto && strategy === "s2") {
-            // --- Strategi 2: TIDAK butuh Entry/SL/TP sama sekali (levelnya
-            // di teks AI cuma informasi teknikal) -- decision BUY/SELL saja
-            // sudah cukup buat market order. TIDAK ada invalidReason gate
-            // seperti Strategi 1/manual karena tidak ada harga yang perlu
-            // divalidasi urutannya.
-            const layerGuard = await checkMt5LayerGuardrails(this.env, symbol);
-
-            if (!layerGuard.allowed) {
-              await sendMessage(
-                this.env,
-                chatId,
-                `🧱⛔ Sinyal ${decision} (Strategi 2) TIDAK dieksekusi: ${escapeHtml(layerGuard.reason)}`
-              );
-            } else {
-              const lot = Number(this.env.MT5_LAYER_LOT) || DEFAULT_LAYER_LOT;
-              try {
-                await enqueueMt5Execution(this.env, symbol, {
-                  signalId,
-                  chatId,
-                  decision,
-                  strategy: "s2",
-                  lot,
-                });
-                layerJustEntered = true;
-                await sendMessage(
-                  this.env,
-                  chatId,
-                  `🧱🔗 Sinyal ${decision} (Strategi 2, Layer) sudah diantre ke MT5 bridge.\nLot: ${lot} (fixed). Market order MURNI (tanpa native SL/TP) — layer ini auto-close SENDIRI begitu floating nyentuh +$${LAYER_TP_USD} (TP) atau -$${LAYER_SL_USD} (SL), dipantau bridge Python.\nLayer aktif setelah ini: ${layerGuard.openLayerCount + 1}/${MAX_LAYERS}.\n⚡ Layer berikutnya akan langsung dicoba lagi dalam ${AUTO_INTERVAL_LAYER_MS / 1000} detik (bukan nunggu 10 menit).`
-                );
-              } catch (err) {
-                console.error("Gagal antre eksekusi MT5 (layer):", err);
-                await sendMessage(this.env, chatId, `⚠️ Strategi 2 gagal antre eksekusi MT5: ${escapeHtml(err.message)}`);
-              }
-            }
-          } else {
           const invalidReason =
             entryPrice == null || slPrice == null || tpPrice == null
               ? "Entry/SL/TP gagal terbaca lengkap dari teks AI Penyimpul"
@@ -466,14 +405,20 @@ export class SessionDO {
                 })`
               : null;
 
+          // Label pesan: Strategi 1 & Strategi 2 auto sama-sama pakai jalur
+          // guardrail + native SL/TP + lot berbasis % risiko di bawah ini --
+          // bedanya cuma label ini & `strategy` yang dikirim ke bridge.
+          const autoLabel = strategy === "s2" ? " (Strategi 2)" : " (Auto-Signal)";
+
           if (invalidReason) {
             await sendMessage(
               this.env,
               chatId,
-              `⚠️ Sinyal ${decision}${job.isAuto ? " (Auto-Signal)" : ""}: ${invalidReason} — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan.`
+              `⚠️ Sinyal ${decision}${job.isAuto ? autoLabel : ""}: ${invalidReason} — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan.`
             );
           } else if (job.isAuto) {
-            // Jalur otonom: cek 3 kontrol risiko dulu sebelum enqueue.
+            // Jalur otonom (Strategi 1 & Strategi 2 -- mekanisme SAMA): cek 3
+            // kontrol risiko dulu sebelum enqueue.
             const guard = await checkMt5AutonomousGuardrails(this.env, symbol, {
               maxTradesPerDay: Number(this.env.MT5_MAX_TRADES_PER_DAY) || DEFAULT_MAX_TRADES_PER_DAY,
               maxDailyLossPct: Number(this.env.MT5_MAX_DAILY_LOSS_PCT) || DEFAULT_MAX_DAILY_LOSS_PCT,
@@ -483,7 +428,7 @@ export class SessionDO {
               await sendMessage(
                 this.env,
                 chatId,
-                `🤖⛔ Sinyal ${decision} (Auto-Signal) TIDAK dieksekusi ke MT5: ${escapeHtml(guard.reason)}`
+                `🤖⛔ Sinyal ${decision}${autoLabel} TIDAK dieksekusi ke MT5: ${escapeHtml(guard.reason)}`
               );
             } else {
               // Lot DIHITUNG DINAMIS dari balance saat ini (bukan fixed lagi)
@@ -497,7 +442,7 @@ export class SessionDO {
                 await sendMessage(
                   this.env,
                   chatId,
-                  `🤖⛔ Sinyal ${decision} (Auto-Signal) TIDAK dieksekusi ke MT5: lot hasil hitung risiko ${RISK_SL_PCT}% (balance $${balanceLabel}, jarak SL ${slDistanceLabel}) ada di bawah lot minimum ${MT5_MIN_LOT}. Modal kemungkinan terlalu kecil untuk jarak SL sinyal ini.`
+                  `🤖⛔ Sinyal ${decision}${autoLabel} TIDAK dieksekusi ke MT5: lot hasil hitung risiko ${RISK_SL_PCT}% (balance $${balanceLabel}, jarak SL ${slDistanceLabel}) ada di bawah lot minimum ${MT5_MIN_LOT}. Modal kemungkinan terlalu kecil untuk jarak SL sinyal ini.`
                 );
               } else {
                 try {
@@ -509,11 +454,12 @@ export class SessionDO {
                     sl: slPrice,
                     tp: tpPrice,
                     lot: sizing.lot,
+                    strategy,
                   });
                   await sendMessage(
                     this.env,
                     chatId,
-                    `🤖🔗 Sinyal ${decision} (Auto-Signal) sudah diantre ke MT5 bridge.\nLot: ${sizing.lot} (≈${RISK_SL_PCT}% risiko = $${sizing.riskAmount.toFixed(2)} dari balance $${balanceLabel}, kalau SL asli kena).\nLapisan tambahan: force-close otomatis kalau floating duluan nyentuh +${RISK_TP_PCT}%/-${RISK_SL_PCT}% balance (jalan di bridge Python), sebelum harga sempat sampai level SL/TP asli sinyal ini.`
+                    `🤖🔗 Sinyal ${decision}${autoLabel} sudah diantre ke MT5 bridge.\nLot: ${sizing.lot} (≈${RISK_SL_PCT}% risiko = $${sizing.riskAmount.toFixed(2)} dari balance $${balanceLabel}, kalau SL asli kena).\nLapisan tambahan: force-close otomatis kalau floating duluan nyentuh +${RISK_TP_PCT}%/-${RISK_SL_PCT}% balance (jalan di bridge Python), sebelum harga sempat sampai level SL/TP asli sinyal ini.`
                   );
                 } catch (err) {
                   console.error("Gagal antre eksekusi MT5 (auto):", err);
@@ -548,7 +494,6 @@ export class SessionDO {
                 `⚠️ Gagal mengantre sinyal ${decision} ke MT5 bridge: ${escapeHtml(err.message)}\n\n(Sinyal teks di atas tetap valid, cuma eksekusi otomatisnya gagal — bisa entry manual kalau perlu.)`
               );
             }
-          }
           }
         }
       }
@@ -616,8 +561,7 @@ export class SessionDO {
       const autoMode = await this.storage.get("autoMode");
       if (autoMode) {
         await this.storage.put("autoNextRun", { symbol, tradeMode, aiMode, strategy });
-        const nextDelay = strategy === "s2" && layerJustEntered ? AUTO_INTERVAL_LAYER_MS : AUTO_INTERVAL_MS;
-        await this.storage.setAlarm(Date.now() + nextDelay);
+        await this.storage.setAlarm(Date.now() + AUTO_INTERVAL_MS);
       }
     } catch (err) {
       console.error("Analysis alarm error:", err);
@@ -649,19 +593,15 @@ export class SessionDO {
     await this.checkOpenSignalsAgainstPrice(symbol, chatId);
 
     // --- Skip siklus (TANPA ambil data pasar / panggil AI sama sekali)
-    // kalau kondisi MT5 sudah "penuh" -- toh sinyal barunya bakal ditolak
+    // kalau masih ada 1 posisi terbuka -- toh sinyal barunya bakal ditolak
     // guardrail juga nanti; jadi analisa AI + generate sinyal sekarang cuma
-    // buang-buang limit API Groq. Beda syarat per strategi:
-    //   Strategi 2: sudah pas MAX_LAYERS layer terbuka.
-    //   Strategi 1 (default): masih ada 1 posisi terbuka.
-    // Dicek pakai snapshot read-only (TIDAK increment counter apa pun).
-    // Diam saja kalau di-skip (tidak kirim notifikasi tiap 10 menit ke
-    // Telegram) supaya tidak spam -- cukup dijadwalkan ulang seperti biasa.
+    // buang-buang limit API Groq. Berlaku SAMA untuk Strategi 1 & Strategi 2
+    // (keduanya "1 posisi dalam satu waktu"). Dicek pakai snapshot read-only
+    // (TIDAK increment counter apa pun). Diam saja kalau di-skip (tidak
+    // kirim notifikasi tiap 10 menit ke Telegram) supaya tidak spam --
+    // cukup dijadwalkan ulang seperti biasa.
     if (isMt5Symbol(symbol)) {
-      const isLayerStrategy = strategy === "s2";
-      const full = isLayerStrategy
-        ? (await getMt5LayerSnapshot(this.env, symbol)).openLayerCount >= MAX_LAYERS
-        : Boolean((await getMt5RiskSnapshot(this.env, symbol)).openPositionTicket);
+      const full = Boolean((await getMt5RiskSnapshot(this.env, symbol)).openPositionTicket);
 
       if (full) {
         const stillAutoAfterSkip = await this.storage.get("autoMode");
