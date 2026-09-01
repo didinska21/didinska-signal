@@ -41,8 +41,16 @@ const DEFAULT_MT5_LOT = 0.01;
 // PERNAH eksekusi ke MT5 — cuma kirim sinyal teks seperti sebelumnya. Ini
 // supaya trading otonom beneran tidak nyala tanpa sengaja/tanpa sadar.
 const AUTONOMOUS_XAUUSD_ENABLED = (env) => env.MT5_AUTONOMOUS_XAUUSD === "true";
-const DEFAULT_MAX_TRADES_PER_DAY = 5;
-const DEFAULT_MAX_DAILY_LOSS_PCT = 3;
+// --- SEMENTARA DINONAKTIFKAN buat keperluan testing win-rate (angka
+// efektif "tidak terbatas") -- 9999 trade/hari & circuit breaker rugi
+// harian di 1000% (praktis tidak akan pernah kena). Mekanismenya TETAP
+// ada & tetap dicek tiap siklus (checkAutonomousGuardrails di
+// mt5_bridge_do.js), jadi gampang diaktifkan lagi kapan pun cukup ubah 2
+// angka ini balik ke wajar (misal 5 & 3), TANPA perlu ubah kode lain. Bisa
+// juga di-override tanpa deploy ulang lewat env var Worker
+// MT5_MAX_TRADES_PER_DAY / MT5_MAX_DAILY_LOSS_PCT.
+const DEFAULT_MAX_TRADES_PER_DAY = 9999;
+const DEFAULT_MAX_DAILY_LOSS_PCT = 1000;
 
 // --- Position sizing dinamis berbasis % risiko (KHUSUS jalur OTONOM XAUUSD)
 // ---
@@ -91,12 +99,15 @@ function calcRiskBasedLot(balance, entryPrice, slPrice) {
   return { lot, slDistance, riskAmount };
 }
 
-// Strategi 2 SEKARANG memakai mekanisme yang PERSIS SAMA dengan Strategi 1
-// (lihat calcRiskBasedLot, RISK_SL_PCT/RISK_TP_PCT, checkMt5AutonomousGuardrails
-// di atas) -- 1 posisi dalam satu waktu, native SL/TP, lot berbasis % risiko,
-// limit trade/hari & circuit breaker rugi harian. Bedanya cuma label
-// `strategy: "s2"` yang dikirim ke bridge (magic number beda di MT5, biar
-// gampang dibedain di history), TIDAK ada lagi 10 layer market-order-murni.
+// Strategi 2 SEKARANG memakai mekanisme EKSEKUSI yang PERSIS SAMA dengan
+// Strategi 1 (lihat calcRiskBasedLot, RISK_SL_PCT/RISK_TP_PCT,
+// checkMt5AutonomousGuardrails di atas) -- 1 posisi dalam satu waktu,
+// native SL/TP, lot berbasis % risiko, limit trade/hari & circuit breaker
+// rugi harian. Bedanya cuma: (1) label `strategy: "s2"` yang dikirim ke
+// bridge (magic number beda di MT5, biar gampang dibedain di history), dan
+// (2) `aiMode: "fiboqm"` (dipilih di src/handlers/router.js) -- entry
+// ditentukan dari Fibonacci Retracement + pola Quasimodo, bukan analisa
+// 10-AI menyeluruh seperti Strategi 1.
 
 export class SessionDO {
   constructor(state, env) {
