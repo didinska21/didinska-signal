@@ -324,19 +324,21 @@ async function handleCallbackQuery(env, callbackQuery) {
     const strategy = currentMode === "choosing_auto_trademode_s2" ? "s2" : "s1";
     await setMode(env, chatId, "idle");
 
-    // Strategi 2 tetap "cepat" (5 AI, cocok buat scalping -- analisa lebih
-    // singkat/cepat diputuskan) VS Strategi 1 "lengkap" (10 AI, analisa
-    // lebih menyeluruh/lambat, cocok daytrade/swing). Bedanya SEKARANG
-    // cuma di kedalaman analisa & gaya timeframe -- eksekusi & risk
+    // Strategi 1 = "lengkap" (10 AI, analisa menyeluruh, cocok
+    // daytrade/swing). Strategi 2 = "fiboqm" (6 AI, fokus Fibonacci
+    // Retracement + pola Quasimodo sebagai dasar utama entry -- filter
+    // presisi, level entry dari struktur harga bukan cuma indikator biasa),
+    // ditunjang Trend/Momentum/Volume/Risk Management. Eksekusi & risk
     // management-nya (1 posisi/waktu, native SL/TP, lot % risiko, circuit
-    // breaker harian) SAMA PERSIS buat keduanya.
-    const aiMode = strategy === "s2" ? "cepat" : "lengkap";
+    // breaker harian) SAMA PERSIS buat keduanya -- bedanya cuma dasar
+    // analisa buat nentuin entry-nya.
+    const aiMode = strategy === "s2" ? "fiboqm" : "lengkap";
     await startAutoSignal(env, chatId, { symbol: "XAUUSD", tradeMode, aiMode, strategy });
 
     const modeLabel = TRADE_MODES[tradeMode]?.label || tradeMode;
     const text =
       strategy === "s2"
-        ? `🎯 <b>Strategi 2 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 5 AI (scalping, analisa cepat)\n\n1 posisi dalam satu waktu, native SL/TP dari AI Penyimpul, lot dihitung otomatis (risiko ≈1% balance ke SL). Force-close tambahan di floating +2%/-1% balance. Limit 5 trade/hari & circuit breaker rugi harian 3%.\n\n<i>Filosofinya: satu pendekatan sederhana yang sama, dipakai konsisten tiap kali, dengan risk management yang ketat.</i>\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`
+        ? `🎯 <b>Strategi 2 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 6 AI (Fibo & QM — entry presisi)\n\nEntry ditentukan dari level Fibonacci Retracement (arah otomatis) & pola Quasimodo sebagai dasar utama, ditunjang Trend/Momentum/Volume/Risk Management. 1 posisi dalam satu waktu, native SL/TP dari AI Penyimpul, lot dihitung otomatis (risiko ≈1% balance ke SL). Force-close tambahan di floating +2%/-1% balance.\n\n⚠️ Limit trade/hari & circuit breaker rugi harian SEMENTARA DIMATIKAN (mode testing win-rate) — trading bisa jalan terus tanpa batas harian sampai kamu stop manual.\n\n<i>Filosofinya: satu pendekatan sederhana yang sama, dipakai konsisten tiap kali, dengan risk management yang ketat — bedanya cuma level entry-nya lebih presisi dari struktur harga.</i>\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`
         : `🧭 <b>Strategi 1 AKTIF</b> — XAUUSD, mode ${escapeHtml(modeLabel)}, 10 AI (analisa menyeluruh)\n\n1 posisi, native SL/TP dari AI Penyimpul, lot dihitung otomatis (risiko ≈1% balance ke SL). Force-close tambahan di floating +2%/-1% balance.\n\nKetik /stop_auto atau tap "⏹️ Stop Auto" buat berhenti kapan aja.`;
     await editMessageText(env, chatId, messageId, text);
     return;
