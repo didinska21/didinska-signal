@@ -246,6 +246,37 @@ export class Mt5BridgeDO {
         });
       }
 
+      // --- Bridge lapor posisi yang TIBA-TIBA HILANG dari open positions
+      // (dibanding siklus sebelumnya) -- native SL/TP kena, ditutup manual
+      // dari terminal/HP, dsb (lihat check_closed_positions() di
+      // mt5_bridge.py). BEDA dari reportForceClose (yang khusus force-close
+      // % OLEH bridge sendiri) -- ini nangkep SEMUA cara penutupan LAIN,
+      // termasuk yang paling umum (native SL/TP). Juga membersihkan
+      // openPositionTicket seperti reportForceClose.
+      case "reportClosedPosition": {
+        const { ticket, profit, reasonLabel, closePrice, volume } = await request.json();
+        const mapped = ticket != null ? await this.storage.get(`ticketMap:${ticket}`) : null;
+        const strategy = mapped?.strategy || "s1";
+
+        const risk = await this.storage.get("riskState");
+        if (risk && risk.openPositionTicket === ticket) {
+          risk.openPositionTicket = null;
+          risk.updatedAt = Date.now();
+          await this.storage.put("riskState", risk);
+        }
+
+        return Response.json({
+          ok: true,
+          chatId: mapped?.chatId ?? null,
+          signalId: mapped?.signalId ?? null,
+          strategy,
+          profit,
+          reasonLabel,
+          closePrice,
+          volume,
+        });
+      }
+
       default:
         return new Response("Unknown action", { status: 404 });
     }
