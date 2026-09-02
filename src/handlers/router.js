@@ -27,7 +27,7 @@ import {
   STRATEGY_KEYBOARD_INTRO_TEXT,
   autoTradeModeKeyboard,
 } from "../menus.js";
-import { listSignals, markSignalResult, summarizeSignalStats } from "../signalLog.js";
+import { listSignals, markSignalResult, summarizeSignalStats, clearSignalHistory } from "../signalLog.js";
 import { formatNewsScheduleText, formatUpcomingAllText } from "../newsScheduleFormat.js";
 import {
   getMode,
@@ -210,6 +210,25 @@ Ketik /stop_auto buat berhenti kapan aja.`
     return;
   }
 
+  // --- Hapus SEMUA riwayat sinyal (dasar hitungan 📊 Riwayat & Akurasi) --
+  // IRREVERSIBLE & GLOBAL (bukan cuma punya chat ini, karena SignalLogDO
+  // memang 1 instance buat semua chat). Wajib konfirmasi dulu lewat tombol,
+  // supaya tidak kepencet/ketik nggak sengaja.
+  if (text === "/reset_riwayat") {
+    await sendMessage(
+      env,
+      chatId,
+      "⚠️ Ini bakal HAPUS SEMUA riwayat sinyal (dasar hitungan 📊 Riwayat & Akurasi) — TIDAK BISA dibatalkan.\n\nYakin?",
+      {
+        inline_keyboard: [
+          [{ text: "✅ Ya, hapus semua", callback_data: "confirm_clear_history" }],
+          [{ text: "❌ Batal", callback_data: "cancel_clear_history" }],
+        ],
+      }
+    );
+    return;
+  }
+
   const mode = await getMode(env, chatId);
 
   // --- Mode: sedang menunggu input simbol pair ---
@@ -299,6 +318,17 @@ async function handleCallbackQuery(env, callbackQuery) {
   const data = callbackQuery.data;
 
   await answerCallbackQuery(env, callbackQuery.id);
+
+  // --- Konfirmasi/batal hapus SEMUA riwayat sinyal (lihat /reset_riwayat) ---
+  if (data === "confirm_clear_history") {
+    const result = await clearSignalHistory(env);
+    await editMessageText(env, chatId, messageId, `🗑️ Riwayat sinyal sudah dihapus (${result.deleted ?? 0} entri). Statistik 📊 Riwayat & Akurasi mulai dari nol lagi.`);
+    return;
+  }
+  if (data === "cancel_clear_history") {
+    await editMessageText(env, chatId, messageId, "Dibatalkan — riwayat sinyal tetap ada.");
+    return;
+  }
 
   // --- Pilih mode trading (Scalping/Day Trade/Swing) ---
   if (data.startsWith("mode_")) {
@@ -420,8 +450,11 @@ async function handleCallbackQuery(env, callbackQuery) {
   switch (data) {
     case "menu_riwayat": {
       const entries = await listSignals(env, chatId);
-      const stats = summarizeSignalStats(entries);
-      await editMessageText(env, chatId, messageId, riwayatStatsText(stats), backOnlyKeyboard("back_main"));
+      const overall = summarizeSignalStats(entries);
+      const s1 = summarizeSignalStats(entries.filter((e) => e.strategy === "s1"));
+      const s2 = summarizeSignalStats(entries.filter((e) => e.strategy === "s2"));
+      const manual = summarizeSignalStats(entries.filter((e) => !e.strategy));
+      await editMessageText(env, chatId, messageId, riwayatStatsText({ overall, s1, s2, manual }), backOnlyKeyboard("back_main"));
       return;
     }
 
