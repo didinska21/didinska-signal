@@ -208,6 +208,9 @@ export class SessionDO {
       case "reset": {
         const storedPhotoPromptMsgId = (await this.storage.get("photoPromptMsgId")) || null;
         const oldPhotoPromptMsgId = storedPhotoPromptMsgId === "PENDING" ? null : storedPhotoPromptMsgId;
+        const hadJob = Boolean(await this.storage.get("job"));
+        const autoMode = await this.storage.get("autoMode");
+
         await this.storage.put("mode", "idle");
         await this.storage.delete("photos");
         await this.storage.delete("photoPromptMsgId");
@@ -215,7 +218,33 @@ export class SessionDO {
         await this.storage.delete("symbol");
         await this.storage.delete("aiMode");
         await this.storage.delete("job");
-        await this.storage.deleteAlarm();
+
+        // PENTING: JANGAN diam-diam matikan auto-mode (Strategi 1/2) cuma
+        // gara-gara /start atau /batal -- dulu deleteAlarm() DIPANGGIL TANPA
+        // SYARAT di sini, jadi kalau user ketik /start SELAGI auto lagi
+        // jalan, alarm (satu-satunya pemicu siklus berikutnya) KEHAPUS &
+        // auto-signal diam-diam BERHENTI TOTAL walau statusnya kelihatan
+        // masih "aktif" (autoMode tetap true di storage, cuma tidak ada
+        // yang menjadwalkan siklus berikutnya lagi). User TIDAK PERNAH
+        // dikasih tahu soal ini -- kalau memang mau berhenti, harus lewat
+        // /stop_auto secara eksplisit.
+        if (hadJob && autoMode) {
+          // Ada job (manual ATAU langkah siklus auto yang lagi jalan) yang
+          // baru saja DIBATALKAN oleh reset ini -- tapi auto-mode HARUS
+          // tetap lanjut. Jadwalkan ulang siklus berikutnya SEKARANG JUGA
+          // (bukan nunggu AUTO_INTERVAL_MS penuh) supaya tidak ada siklus
+          // yang "hilang" gara-gara ini.
+          const autoNextRun = await this.storage.get("autoNextRun");
+          if (autoNextRun) await this.storage.setAlarm(Date.now());
+        } else if (hadJob && !autoMode) {
+          // Job manual dibatalkan, TIDAK ada auto-mode yang perlu dijaga --
+          // aman hapus alarm yang terjadwal buat job ini seperti biasa.
+          await this.storage.deleteAlarm();
+        }
+        // Kalau !hadJob: alarm yang mungkin lagi terjadwal (kalau ada)
+        // PASTI cuma urusan auto-mode nunggu siklus berikutnya (bukan job
+        // manual apa pun) -- BIARKAN SAJA, jangan disentuh sama sekali.
+
         return Response.json({ ok: true, photoPromptMsgId: oldPhotoPromptMsgId });
       }
 
@@ -389,6 +418,12 @@ export class SessionDO {
           slPrice,
           tpPrice,
           createdAt: Date.now(),
+          // strategy: "s1"/"s2" KALAU dari auto-signal (Strategi 1/2 lewat
+          // keyboard permanen); null kalau sinyal MANUAL (bukan bagian dari
+          // konsep "Strategi 1/2" sama sekali). Dipakai buat pecah statistik
+          // 📊 Riwayat & Akurasi per strategi.
+          strategy: job.isAuto ? strategy : null,
+          isAuto: Boolean(job.isAuto),
         });
         resultKeyboard = signalResultKeyboard(signalId);
 
@@ -427,6 +462,23 @@ export class SessionDO {
               chatId,
               `⚠️ Sinyal ${decision}${job.isAuto ? autoLabel : ""}: ${invalidReason} — eksekusi otomatis ke MT5 DIBATALKAN demi keamanan.`
             );
+            if (job.isAuto) {
+              // Mode auto TIDAK ADA yang mengawasi -- kalau tidak pernah
+              // dieksekusi ke MT5, TIDAK ADA trade nyata sama sekali. Tandai
+              // "skipped" (BUKAN dibiarkan "open" selamanya) supaya tidak
+              // nyangkut nunggu ditandai/di-closed yang TIDAK AKAN PERNAH
+              // terjadi -- lihat summarizeSignalStats() di signalLog.js,
+              // status ini DIKECUALIKAN dari statistik 📊 Riwayat & Akurasi
+              // sama sekali (bukan dihitung kalah, bukan juga "belum
+              // ditandai"). Beda dari mode MANUAL: signalId tetap "open"
+              // (TIDAK ditandai skipped) karena user masih bisa entry
+              // manual sendiri & tap tombol TP/SL Kena nanti.
+              try {
+                await markSignalResult(this.env, signalId, "skipped");
+              } catch (err) {
+                console.error("Gagal tandai sinyal skipped (invalid):", err);
+              }
+            }
           } else if (job.isAuto) {
             // Jalur otonom (Strategi 1 & Strategi 2 -- mekanisme SAMA): cek 3
             // kontrol risiko dulu sebelum enqueue.
@@ -441,6 +493,13 @@ export class SessionDO {
                 chatId,
                 `🤖⛔ Sinyal ${decision}${autoLabel} TIDAK dieksekusi ke MT5: ${escapeHtml(guard.reason)}`
               );
+              // Sama seperti invalidReason di atas -- tidak ada trade nyata,
+              // tandai "skipped" biar tidak nyangkut "open" selamanya.
+              try {
+                await markSignalResult(this.env, signalId, "skipped");
+              } catch (err) {
+                console.error("Gagal tandai sinyal skipped (guardrail):", err);
+              }
             } else {
               // Lot DIHITUNG DINAMIS dari balance saat ini (bukan fixed lagi)
               // -- SL/TP harga TETAP dari AI Penyimpul, cuma lot-nya yang
@@ -455,6 +514,11 @@ export class SessionDO {
                   chatId,
                   `🤖⛔ Sinyal ${decision}${autoLabel} TIDAK dieksekusi ke MT5: lot hasil hitung risiko ${RISK_SL_PCT}% (balance $${balanceLabel}, jarak SL ${slDistanceLabel}) ada di bawah lot minimum ${MT5_MIN_LOT}. Modal kemungkinan terlalu kecil untuk jarak SL sinyal ini.`
                 );
+                try {
+                  await markSignalResult(this.env, signalId, "skipped");
+                } catch (err) {
+                  console.error("Gagal tandai sinyal skipped (lot minimum):", err);
+                }
               } else {
                 try {
                   await enqueueMt5Execution(this.env, symbol, {
@@ -475,6 +539,14 @@ export class SessionDO {
                 } catch (err) {
                   console.error("Gagal antre eksekusi MT5 (auto):", err);
                   await sendMessage(this.env, chatId, `⚠️ Auto-Signal gagal antre eksekusi MT5: ${escapeHtml(err.message)}`);
+                  // Enqueue GAGAL TOTAL (misal error jaringan ke Durable
+                  // Object) -- posisi TIDAK PERNAH kekirim ke MT5 sama
+                  // sekali, jadi sama seperti kasus di atas: skipped.
+                  try {
+                    await markSignalResult(this.env, signalId, "skipped");
+                  } catch (err2) {
+                    console.error("Gagal tandai sinyal skipped (enqueue error):", err2);
+                  }
                 }
               }
             }
