@@ -14,8 +14,8 @@ compatibility_date = "2024-11-01"
 # commit, push. JANGAN ubah lewat dashboard lagi, biar tidak "hilang" lagi.
 [vars]
 MT5_AUTONOMOUS_XAUUSD = "true"
-MT5_MAX_TRADES_PER_DAY = "5"
-MT5_MAX_DAILY_LOSS_PCT = "10"
+MT5_MAX_TRADES_PER_DAY = "999999999"
+MT5_MAX_DAILY_LOSS_PCT = "999999999"
 MT5_DEFAULT_LOT = "0.01"
 GROQ_TEXT_MODEL = "openai/gpt-oss-120b"
 GROQ_SUMMARY_MODEL = "openai/gpt-oss-120b"
