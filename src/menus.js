@@ -35,31 +35,36 @@ export function signalResultKeyboard(signalId) {
   };
 }
 
-/** Teks ringkasan win-rate untuk menu "Riwayat & Akurasi" */
-export function riwayatStatsText(stats) {
-  const { total, win, loss, open, winRatePct } = stats;
-
-  if (total === 0) {
+/** Teks ringkasan win-rate untuk menu "Riwayat & Akurasi", DIPECAH per
+ * strategi (🧭 Strategi 1 auto, 🎯 Strategi 2 auto, ✋ manual) selain total
+ * keseluruhan -- biar kelihatan mana yang win-rate-nya lebih bagus. */
+export function riwayatStatsText({ overall, s1, s2, manual }) {
+  if (overall.total === 0) {
     return `📊 <b>Riwayat & Akurasi</b>
 
-Belum ada sinyal yang tercatat. Coba "Signal Trade" dulu, nanti tiap hasil sinyal bisa kamu tandai (TP/SL kena) lewat tombol di pesannya — dari situ baru kelihatan win-rate yang sebenarnya (bukan tebakan AI).`;
+Belum ada sinyal yang tercatat. Coba "Signal Trade" dulu (atau nyalain Strategi 1/2 lewat keyboard permanen) -- trade yang dieksekusi ke MT5 tercatat OTOMATIS begitu closed, atau bisa kamu tandai manual (TP/SL kena) lewat tombol di pesan sinyalnya. Dari situ baru kelihatan win-rate yang sebenarnya (bukan tebakan AI).`;
   }
 
-  const winRateLine =
-    winRatePct === null
-      ? "Belum ada yang ditandai hasilnya."
-      : `<b>${winRatePct}%</b> (dari ${win + loss} sinyal yang sudah ditandai)`;
+  const section = (label, stats) => {
+    if (stats.total === 0) return `${label}: belum ada data.`;
+    const winRateLine =
+      stats.winRatePct === null
+        ? "belum ada yang ditandai/closed"
+        : `<b>${stats.winRatePct}%</b> win-rate (${stats.win}W/${stats.loss}L dari ${stats.decided})`;
+    return `${label}: ${stats.total} sinyal — ${winRateLine}${stats.open > 0 ? `, ${stats.open} belum ditandai` : ""}`;
+  };
+
+  const overallRate = overall.winRatePct === null ? "belum ada yang ditandai/closed" : `${overall.winRatePct}% win-rate (${overall.win}W/${overall.loss}L)`;
 
   return `📊 <b>Riwayat & Akurasi</b>
 
-Total sinyal tercatat: <b>${total}</b>
-✅ Menang (TP): ${win}
-❌ Kalah (SL): ${loss}
-⏳ Belum ditandai: ${open}
+${section("🧭 Strategi 1", s1)}
+${section("🎯 Strategi 2", s2)}
+${section("✋ Manual", manual)}
 
-📈 Win-rate: ${winRateLine}
+<b>Total keseluruhan</b>: ${overall.total} sinyal — ${overallRate}
 
-<i>Angka ini dari hasil yang KAMU tandai sendiri di tiap sinyal — bukan tebakan probabilitas dari AI. Makin rajin ditandai, makin akurat gambarannya.</i>`;
+<i>Trade yang dieksekusi ke MT5 (native SL/TP, force-close, dst) tercatat OTOMATIS begitu closed. Sinyal manual yang cuma ditampilkan teksnya (tidak dieksekusi ke MT5) perlu kamu tandai sendiri lewat tombol TP/SL Kena di pesannya.</i>`;
 }
 
 // --- Jadwal News ---
