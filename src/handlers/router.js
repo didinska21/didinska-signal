@@ -450,11 +450,9 @@ async function handleCallbackQuery(env, callbackQuery) {
   switch (data) {
     case "menu_riwayat": {
       const entries = await listSignals(env, chatId);
-      const overall = summarizeSignalStats(entries);
       const s1 = summarizeSignalStats(entries.filter((e) => e.strategy === "s1"));
       const s2 = summarizeSignalStats(entries.filter((e) => e.strategy === "s2"));
-      const manual = summarizeSignalStats(entries.filter((e) => !e.strategy));
-      await editMessageText(env, chatId, messageId, riwayatStatsText({ overall, s1, s2, manual }), backOnlyKeyboard("back_main"));
+      await editMessageText(env, chatId, messageId, riwayatStatsText({ s1, s2 }), backOnlyKeyboard("back_main"));
       return;
     }
 
