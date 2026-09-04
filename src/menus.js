@@ -35,14 +35,19 @@ export function signalResultKeyboard(signalId) {
   };
 }
 
-/** Teks ringkasan win-rate untuk menu "Riwayat & Akurasi", DIPECAH per
- * strategi (🧭 Strategi 1 auto, 🎯 Strategi 2 auto, ✋ manual) selain total
- * keseluruhan -- biar kelihatan mana yang win-rate-nya lebih bagus. */
-export function riwayatStatsText({ overall, s1, s2, manual }) {
+/** Teks ringkasan win-rate untuk menu "Riwayat & Akurasi" -- KHUSUS
+ * Strategi 1 & 2 (auto), DIPECAH per strategi + total gabungan keduanya.
+ * Sinyal MANUAL ("Signal Trade" manual, bukan bagian auto-mode) SENGAJA
+ * TIDAK dihitung/ditampilkan di sini sama sekali -- kebanyakan cuma hasil
+ * testing/eksplorasi, bukan representasi trade beneran, jadi cuma bikin
+ * noise buat menilai performa strategi auto. */
+export function riwayatStatsText({ s1, s2 }) {
+  const overall = combineSignalStats(s1, s2);
+
   if (overall.total === 0) {
     return `📊 <b>Riwayat & Akurasi</b>
 
-Belum ada sinyal yang tercatat. Coba "Signal Trade" dulu (atau nyalain Strategi 1/2 lewat keyboard permanen) -- trade yang dieksekusi ke MT5 tercatat OTOMATIS begitu closed, atau bisa kamu tandai manual (TP/SL kena) lewat tombol di pesan sinyalnya. Dari situ baru kelihatan win-rate yang sebenarnya (bukan tebakan AI).`;
+Belum ada sinyal dari Strategi 1/2. Nyalain salah satu dulu lewat keyboard permanen di bawah kolom ketik -- trade yang dieksekusi ke MT5 tercatat OTOMATIS begitu closed (native SL/TP, force-close, dst), tidak perlu ditandai manual.`;
   }
 
   const section = (label, stats) => {
@@ -60,11 +65,21 @@ Belum ada sinyal yang tercatat. Coba "Signal Trade" dulu (atau nyalain Strategi 
 
 ${section("🧭 Strategi 1", s1)}
 ${section("🎯 Strategi 2", s2)}
-${section("✋ Manual", manual)}
 
 <b>Total keseluruhan</b>: ${overall.total} sinyal — ${overallRate}
 
-<i>Trade yang dieksekusi ke MT5 (native SL/TP, force-close, dst) tercatat OTOMATIS begitu closed. Sinyal manual yang cuma ditampilkan teksnya (tidak dieksekusi ke MT5) perlu kamu tandai sendiri lewat tombol TP/SL Kena di pesannya.</i>`;
+<i>Trade Strategi 1/2 yang dieksekusi ke MT5 (native SL/TP, force-close, dst) tercatat OTOMATIS begitu closed -- tidak perlu ditandai manual. Sinyal dari "Signal Trade" manual TIDAK dihitung di sini.</i>`;
+}
+
+/** Jumlahin 2 hasil summarizeSignalStats() (S1 + S2) jadi 1 total gabungan. */
+function combineSignalStats(a, b) {
+  const total = a.total + b.total;
+  const win = a.win + b.win;
+  const loss = a.loss + b.loss;
+  const open = a.open + b.open;
+  const decided = win + loss;
+  const winRatePct = decided > 0 ? Math.round((win / decided) * 1000) / 10 : null;
+  return { total, win, loss, open, decided, winRatePct };
 }
 
 // --- Jadwal News ---
